@@ -4,6 +4,7 @@ import { answerOnboarding, startOnboarding, syncUserFiles, userSoul } from './us
 import { rememberFromMessage, searchMemories, selectMemoryContext, upsertMemory } from './memory.mjs';
 import { formatWhen, nextDailyAt, parseWhenPrefix, validTimeZone } from './schedule.mjs';
 import { proactiveSettings, runProactiveTick } from './proactive.mjs';
+import { formatChunks } from './telegram-format.mjs';
 
 const upsertState = (db, key, value) => db.prepare('INSERT INTO app_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, String(value));
 
@@ -309,8 +310,15 @@ export async function startTelegramBot({ db, hash, random, now, dataDir }) {
     return data.result;
   }
   async function sendChunks(chatId,value){
-    const chunks=String(value).match(/[\s\S]{1,4000}/g)||[''];
-    for(const chunk of chunks)await call('sendMessage',{chat_id:chatId,text:chunk});
+    const chunks=formatChunks(String(value));
+    if(!chunks.length)return call('sendMessage',{chat_id:chatId,text:' '});
+    for(const chunk of chunks){
+      try{await call('sendMessage',{chat_id:chatId,text:chunk.html,parse_mode:'HTML',link_preview_options:{is_disabled:true}})}
+      catch(error){
+        if(!/parse|entity|message is too long/i.test(error.message))throw error;
+        await call('sendMessage',{chat_id:chatId,text:chunk.plain,link_preview_options:{is_disabled:true}});
+      }
+    }
   }
   const me = await call('getMe', {});
   upsertState(db, 'telegram_bot_username', me.username);

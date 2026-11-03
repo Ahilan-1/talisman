@@ -23,6 +23,25 @@ node /opt/talisman/computer.mjs text
 
 Answer with the time and the source, and say plainly when a seat map would not load.
 
+## When a listing page never shows results
+
+Travel, ticketing and shopping pages fetch their results after the page loads, sometimes only after a date or city is
+chosen. `read` and `text` now wait for the text to stop growing and retry once by scrolling and reloading, but you
+still have to be patient:
+
+```sh
+node /opt/talisman/computer.mjs open "https://www.redbus.in/bus-tickets/chennai-to-vellore"
+node /opt/talisman/computer.mjs wait "[class*=busItem], .bus-item, [data-testid=bus]" 15000
+node /opt/talisman/computer.mjs text
+node /opt/talisman/computer.mjs scroll down 1200
+node /opt/talisman/computer.mjs wait "[class*=busItem], .bus-item" 10000
+node /opt/talisman/computer.mjs text
+```
+
+If a date-specific URL still shows no buses: set the date in the page (click the date field, pick the day, apply),
+wait for the list, then read. If it stays empty after two attempts, report the route and date as unverified instead of
+quoting a generic route fare as if it were that day's price.
+
 ## Example: a page looks empty
 
 1. `text` shows navigation only → the app has not rendered.

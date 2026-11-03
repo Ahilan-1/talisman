@@ -8,17 +8,28 @@ import { chromium } from 'playwright-core';
 const run = promisify(execFile);
 const root = '/config/talisman-computer';
 const shots = path.join(root, 'screenshots');
+const profile = path.join(root, 'profile');
 fs.mkdirSync(shots, { recursive: true, mode: 0o700 });
 let context, page, busy = false;
 
+async function clearStaleProfileLock() {
+  const { stdout } = await run('ps', ['-eo', 'comm=,args='], { timeout: 5000 });
+  const inUse = stdout.split('\n').some(line => /^chromium\s/.test(line.trim()) && line.includes(`--user-data-dir=${profile}`));
+  if (inUse) throw Error('The assigned browser profile is already in use');
+  for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+    fs.rmSync(path.join(profile, name), { force: true });
+  }
+}
+
 async function browser() {
   if (!context) {
-    context = await chromium.launchPersistentContext(path.join(root, 'profile'), {
+    await clearStaleProfileLock();
+    context = await chromium.launchPersistentContext(profile, {
       executablePath: '/usr/bin/chromium', headless: false, viewport: { width: 1365, height: 900 },
       args: ['--no-sandbox', '--disable-dev-shm-usage'], timeout: 30_000,
     });
     page = context.pages()[0] || await context.newPage();
-    page.setDefaultTimeout(20_000);
+    page.setDefaultTimeout(25_000);
   }
   return page;
 }
@@ -44,6 +55,38 @@ async function summary(tab) {
 
 async function settle(tab) {
   await tab.waitForLoadState('networkidle', { timeout: 7000 }).catch(() => {});
+}
+
+// SPAs paint long after domcontentloaded. Wait until the visible text stops growing.
+async function settleContent(tab, budget = 5_000) {
+  let previous = -1, stable = 0;
+  const started = Date.now();
+  while (Date.now() - started < budget) {
+    const length = await tab.evaluate(() => (document.body?.innerText || '').length).catch(() => 0);
+    if (length > 0 && length === previous) stable += 1; else { stable = 0; previous = length; }
+    if (stable >= 2) return;
+    await tab.waitForTimeout(400).catch(() => {});
+  }
+}
+
+async function loadPage(tab, url, timeout = 45_000) {
+  await tab.goto(publicUrl(url), { waitUntil: 'domcontentloaded', timeout });
+  await settleContent(tab);
+}
+
+const looksUnfinished = value => value.text.length < 60 || /^(loading|please wait|just a moment|please enable javascript)/i.test(value.text.trim());
+
+// If a listing page comes back thin, nudge it: scroll for lazy content, then reload once.
+async function ensureContent(tab, selector) {
+  let result = await pageText(tab, selector);
+  if (String(selector || '').trim() || result.blocked || !looksUnfinished(result)) return result;
+  await tab.mouse.wheel(0, 900).catch(() => {});
+  await settleContent(tab, 6_000);
+  result = await pageText(tab, selector);
+  if (result.blocked || !looksUnfinished(result)) return result;
+  await tab.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
+  await settleContent(tab, 6_000);
+  return pageText(tab, selector);
 }
 
 async function pageText(tab, selector) {
@@ -106,11 +149,10 @@ async function action(data) {
     }, query.toLowerCase());
   }
   if (kind === 'read') {
-    await tab.goto(publicUrl(data.url), { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    await settle(tab);
-    return pageText(tab, data.selector);
+    await loadPage(tab, data.url);
+    return ensureContent(tab, data.selector);
   }
-  if (kind === 'text') return pageText(tab, data.selector);
+  if (kind === 'text') return ensureContent(tab, data.selector);
   if (kind === 'wait') {
     const selector = String(data.selector || '').trim();
     const text = String(data.text || '').trim();
@@ -140,9 +182,8 @@ async function action(data) {
   if (kind === 'newtab') {
     const fresh = await context.newPage();
     fresh.setDefaultTimeout(20_000);
-    if (data.url) await fresh.goto(publicUrl(data.url), { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    if (data.url) await loadPage(fresh, data.url);
     page = fresh;
-    await settle(page);
     return summary(page);
   }
   if (kind === 'switch') {
@@ -152,7 +193,7 @@ async function action(data) {
     page = list[index];
     return summary(page);
   }
-  if (kind === 'open') { await tab.goto(publicUrl(data.url), { waitUntil: 'domcontentloaded', timeout: 30_000 }); await settle(tab); }
+  if (kind === 'open') { await loadPage(tab, data.url); }
   else if (kind === 'click') {
     const target = tab.locator(String(data.selector || '')).first();
     const label = ((await target.innerText().catch(() => '')) + ' ' + (await target.getAttribute('aria-label').catch(() => '') || '')).trim();

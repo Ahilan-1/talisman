@@ -24,7 +24,7 @@ async function imageInput(screenshotPath){
  }catch{return null}
 }
 async function computerAction(action,args,signal){
- const result=await request('http://127.0.0.1:4150/action',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,...args}),signal:AbortSignal.any([signal,AbortSignal.timeout(45_000)])});
+ const result=await request('http://127.0.0.1:4150/action',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,...args}),signal:AbortSignal.any([signal,AbortSignal.timeout(90_000)])});
  if(action==='screenshot'&&result?.screenshot){const {screenshot,...rest}=result;const image=await imageInput(screenshot);return {result:rest,image};}
  return {result};
 }
@@ -33,8 +33,8 @@ async function openAIComputer(job,p){
  const input=[...(Array.isArray(p.history)?p.history.slice(-16).filter(x=>['user','assistant'].includes(x.role)).map(x=>({role:x.role,content:String(x.text||'').slice(0,2000)})):[]),{role:'user',content:String(p.text||'')}];
  const started=Date.now();
  try{
-  for(let round=0;round<18;round++){
-   if(Date.now()-started>4*60_000)throw Error('The computer task took too long. Please try a narrower request.');
+  for(let round=0;round<22;round++){
+   if(Date.now()-started>5*60_000)throw Error('The computer task took too long. Please try a narrower request.');
    const response=await request(`${control}/api/worker/openai/step`,{method:'POST',headers:{...auth,'content-type':'application/json'},body:JSON.stringify({text:p.text,context:p.context||[],soul:p.soul||'',input,timeZone:p.timeZone||'UTC'}),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(140000)])});
    const calls=Array.isArray(response.calls)?response.calls:[];
    if(!calls.length)return {text:response.text||'I checked, but I could not verify a result yet.'};
@@ -84,7 +84,7 @@ async function run(job){const p=job.payload||{};
   return {filename:extracted.name,extracted:extracted.text,text:`I read ${extracted.name}. Here is the extracted text:\n\n${extracted.text.slice(0,3000)}${extracted.text.length>3000?'\n\nMore is saved in your Talisman documents.':''}`};
  }
  if(job.kind==='watch'){
-  const result=await request('http://127.0.0.1:4150/action',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'read',url:p.url,selector:p.selector||''}),timeoutMs:45_000});
+  const result=await request('http://127.0.0.1:4150/action',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'read',url:p.url,selector:p.selector||''}),timeoutMs:90_000});
   if(result.blocked||/sorry, you have been blocked|attention required! \| cloudflare|access denied/i.test(`${result.title} ${result.text}`))throw Error('The website blocked browser access');
   return {watchId:p.watchId,url:result.url,title:result.title,extracted:result.text};
  }

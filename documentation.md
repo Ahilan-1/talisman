@@ -185,6 +185,10 @@ that loop is thin.
 
 ## 4. Why web-browser tasks still fail to load
 
+> Navigation now waits for text to stabilise and retries with a scroll then a reload (§11), and Telegram renders
+> Markdown as HTML. The causes below are the historical analysis that drove those fixes; most are still relevant on
+> hostile sites.
+
 This is the most reported symptom: "I asked it to check a site and nothing came back / the page did not load."
 The causes are concrete and mostly in `computer-service.mjs` and `worker.mjs`.
 
@@ -192,8 +196,9 @@ The causes are concrete and mostly in `computer-service.mjs` and `worker.mjs`.
    `waitUntil: 'domcontentloaded'`. On a JS-rendered site (travel, ticketing, e-commerce) the DOM is empty at that
    point, so `innerText` returns navigation chrome and "loading…" placeholders. There is no wait for a selector,
    no network-idle wait, and no retry with a longer budget.
-2. **A 12-second default page timeout.** `page.setDefaultTimeout(12_000)` is shorter than a cold Chromium start,
-   a consent interstitial, or a first-paint on a slow site. Failures look like "computer failed" to the user.
+2. **A 12-second default page timeout.** It was shorter than a cold Chromium start, a consent interstitial, or a
+   first-paint on a slow site, so failures looked like "computer failed". The default is now 25 s with 45 s
+   navigation budgets.
 3. **A single global `busy` lock.** `computer-service.mjs` rejects any concurrent request with HTTP 429
    "Computer is busy". A `/watch` check running at the same time as a message job is enough to fail one of them,
    and the failure surfaces as a generic error.
@@ -526,10 +531,28 @@ without a hardcoded list.
 ### Browser tools and vision
 
 `computer-service.mjs` gained `text`, `wait` (selector, text, or network idle), `scroll`, `select`, `hover`,
-`back`, `forward`, `newtab`, `switch`, and a `blocked` flag on every read. The default page timeout rose to 20 s, and
-navigation now settles on network idle where possible. Search falls back to DuckDuckGo after Google and Bing, and the
-result selector covers all three. The single `busy` lock now waits up to 20 s for the current action instead of failing
-immediately.
+`back`, `forward`, `newtab`, `switch`, and a `blocked` flag on every read. Search falls back to DuckDuckGo after Google
+and Bing, and the result selector covers all three. The single `busy` lock now waits up to 20 s for the current action
+instead of failing immediately.
+
+Navigation waits for `domcontentloaded`, then polls `document.body.innerText` briefly until its length stops changing.
+It does not wait for network idle on every page because travel sites may keep analytics connections open. If a read
+still shows an empty page or a loading placeholder, it scrolls to trigger lazy content, waits again, and reloads once.
+Short but complete pages stay valid. The browser also clears stale Chromium profile locks after a container restart,
+which previously prevented the browser from launching at all. Action timeouts rose from 45 s to 90 s, and the OpenAI
+tool loop allows 22 rounds inside 5 minutes. A live redBus date page returned actual buses, seats, and fares in the
+assigned computer after this change.
+
+### Telegram delivery formatting
+
+Telegram only renders markup when `parse_mode` is set, so the agent's Markdown used to arrive literally as `**bold**`
+and `[label](https://long-url)`. `telegram-format.mjs` now converts Markdown to Telegram HTML (`<b>`, `<i>`, `<code>`,
+`<pre>`, `<a href>`), escapes everything else so a stray `<` cannot break the message, collapses triple newlines, and
+splits replies into chunks under 3 500 characters after HTML conversion, so every chunk has balanced tags and
+stays under the 4 096 character limit. Every send goes out with `parse_mode: 'HTML'` and link previews disabled; if
+Telegram rejects the entities, that chunk is re-sent as plain text with the Markdown stripped, so a formatting bug can
+never swallow a reply. The voice guide also now tells the model how to write for Telegram: short paragraphs, bold only
+for the one number that matters, and links as short labels rather than raw URLs.
 
 The OpenAI route exposes all of these plus `screenshot`. A screenshot is returned as an image the model can actually
 see (base64 `input_image`, viewport only, capped at 2.5 MB), not just a file path. Tool schemas now mark optional
