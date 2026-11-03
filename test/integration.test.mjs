@@ -33,6 +33,8 @@ test('Telegram-only chat, single-account pairing, legacy linking, and connected 
  assert.equal(db.prepare('SELECT step FROM user_profiles WHERE user_id=?').get(firstId).step,'done');
  await handleTelegramMessage(db,{chat:{id:111,type:'private'},from:{id:111,username:'one'},text:'/remember timezone: Asia/Kolkata'},deps);
  assert.match(fs.readFileSync(path.join(temp,'db','users',firstId,'MEMORY.md'),'utf8'),/Asia\/Kolkata/);
+ await handleTelegramMessage(db,{chat:{id:111,type:'private'},from:{id:111,username:'one'},text:'/timezone Asia/Kolkata'},deps);
+ assert.match(sent.at(-1).text,/Asia\/Kolkata/);
  await handleTelegramMessage(db,{chat:{id:111,type:'private'},from:{id:111,username:'one'},text:'Remember that I like quiet mornings.'},deps);
  assert.match(fs.readFileSync(path.join(temp,'db','users',firstId,'MEMORY.md'),'utf8'),/quiet mornings/);
  await handleTelegramMessage(db,{chat:{id:111,type:'private'},from:{id:111,username:'one'},text:'Forget that I like quiet mornings.'},deps);

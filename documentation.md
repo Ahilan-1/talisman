@@ -232,6 +232,9 @@ and an explicit "what I could and could not verify" reply contract.
 
 ## 5. Why memory is not good yet
 
+> Memory v2 below (§11) replaces this. The limits in this section are the historical reason for the rewrite and still
+describe what the system cannot do (no embeddings, no per-topic retrieval).
+
 Memory today is a flat key/value table injected as text. It is honest, auditable and cheap — and it does not scale.
 
 - **Fixed, unordered budget.** `enqueue()` takes `ORDER BY updated_at DESC LIMIT 20` memories. Anything written
@@ -263,7 +266,10 @@ forget controls, and a summariser that keeps a rolling project state per account
 
 ## 6. Why the prompt is not good yet
 
-Four prompt surfaces have drifted apart:
+> The prompt layer was consolidated into `prompt.mjs` plus `prompts/voice.md`, `prompts/policy.md` and
+> `prompts/talisman.md` (§11). This section records why the rewrite was necessary.
+
+Four prompt surfaces had drifted apart:
 
 | Location | Used by |
 | --- | --- |
@@ -301,10 +307,12 @@ golden-task evaluation harness run before any prompt change ships.
 
 ## 7. Tools that do not exist yet
 
-Browser layer (both paths): screenshot + vision, scroll, hover, select option, back/forward, tab management,
-file upload, file download and read, explicit wait (selector/network/text), cookie/consent handling, iframe
-support, network inspection, block detection with alternate sources, structured extraction (tables, JSON-LD),
-PDF reading from a URL.
+> Implemented in this pass (§11): browser screenshot with vision, scroll, hover, select, back/forward, tabs, explicit
+> wait, whole-page text, and block detection. Still missing is the list below.
+
+Browser layer (both paths): file upload, file download and read, cookie/consent handling, iframe support, network
+inspection, structured extraction (tables, JSON-LD), PDF reading from a URL, and a vision pass over a full-page
+screenshot (only viewport screenshots are sent today).
 
 Beyond the browser: shell/filesystem tools on the OpenAI path (the free path has them via OpenCode only), code
 execution sandbox, calendar read/write, email read/draft (send requires explicit approval), contacts, maps and
@@ -398,7 +406,7 @@ expose in the OpenAI namespace in `openai-connection.mjs`, add to `allowed` in `
 Local run (see `README.md`): build the desktop image, `docker compose up -d --build talisman provisioner`, open
 `http://127.0.0.1:3000`, send `/start` to the bot, enter the code.
 
-Tests: `npm test` runs `test/integration.test.mjs` (Node 22+, no Docker required — the test stubs OpenCode with a local HTTP server). `test/manual-browser-smoke.mjs` is a manual script that must run inside a paired computer and is deliberately not part of `npm test`.
+Tests: `npm test` runs `test/integration.test.mjs` and `test/units.test.mjs` (Node 22+, no Docker required — the integration test stubs OpenCode with a local HTTP server; the unit test covers memory retention and schedule parsing). `test/manual-browser-smoke.mjs` is a manual script that must run inside a paired computer and is deliberately not part of `npm test`.
 
 ---
 
@@ -425,7 +433,118 @@ not a product. Do not onboard paying users on this architecture.
 
 ---
 
-## 11. Working on this repo
+## 11. Agent brain v2
+
+This pass replaced the ad-hoc prompt, memory and scheduling code with four modules that both routes share.
+
+### Prompt module
+
+| File | Purpose |
+| --- | --- |
+| `prompts/voice.md` | Who Talisman is, how it speaks, good/bad reply examples, anti-patterns |
+| `prompts/policy.md` | The task loop, complex-task rules, memory contract, honesty contract, safety gates, budget, proactivity |
+| `prompts/talisman.md` | Facts about the computer (skills, browser, shell, privacy) |
+| `prompt.mjs` | `buildReplyPrompt`, `buildTaskPrompt`, `buildToolPrompt`, timezone stamp, memory and history rendering |
+
+`worker.mjs` (OpenCode route) and `openai-connection.mjs` (OpenAI routes) both call the same builder, so voice and
+policy can no longer drift between providers. The prompt is assembled in a fixed order: voice → policy → runtime →
+local time → skills → known profile → memory → history → task contract. Both images copy `prompt.mjs` and `prompts/`.
+
+### Memory v2 (`memory.mjs`)
+
+- Columns added in place: `kind` (fact, preference, entity, task, goal), `importance` 1–5, `hits`, `source`,
+  `last_used_at`. Existing installs are upgraded with guarded `ALTER TABLE` statements.
+- `extractFromMessage` captures durable facts from ordinary messages (name, timezone, city, explicit preferences,
+  contact details, "my X is Y", explicit remember requests) and stores them with `source='auto'`. Slash commands are
+  never extracted. The rules are deliberately conservative — better to miss a fact than to store a wrong one.
+- `selectMemoryContext` ranks every saved fact by importance, explicitness, recency, reuse and keyword overlap with the
+  current message, then fills a character budget. **Facts that do not fit are still listed by key** in the prompt, so the
+  agent knows they exist and can ask instead of pretending they were never saved.
+- `upsertMemory` deduplicates by value, so "dark mode" and "Dark mode" are one memory instead of two.
+- `/memory <words>` searches saved facts; `/memories` lists the most useful ones with a total count; `/forget` still
+  removes one.
+- Retention is measured, not asserted: `test/units.test.mjs` saves 80 facts, selects with a tight budget, and requires
+  **≥ 90 %** of them to be reachable (present in context or listed in the index). The current implementation returns
+  100 % of keys.
+
+`SOUL.md` and `MEMORY.md` remain a human-readable mirror under `/data/users/<id>/`; the database is the source of truth.
+
+### `/kill` semantics
+
+`/kill` now cancels only queued and running jobs, drops their unanswered conversation rows, and clears the OpenCode
+session id. Memories, reminders, recurring tasks, scheduled tasks and completed conversation history survive. Earlier
+versions deleted the whole conversation, which read as "it forgot everything".
+
+### Proactive engine (`proactive.mjs`)
+
+Talisman now starts conversations. A 60-second tick evaluates each account and sends at most one message per six hours,
+never inside quiet hours (default 22:00–08:00 local), never while a request is still undelivered, and only when the
+assigned computer is online.
+
+1. **Morning brief** — at the user's brief time (default 09:00 local), composed from reminders, scheduled tasks and
+   recurring tasks due in the next 24 hours. No model call, so it cannot hallucinate a bill.
+2. **Open-loop nudge** — if the last assistant message was a question and the user has not replied for three hours, one
+   reminder of that question, at most once per 20 hours.
+3. **Failed-task follow-up** — a job that failed in the last 24 hours gets one "want me to try again?" with the task text.
+
+Controls: `/proactive on|off`, `/brief HH:MM`, `/status`. Every send is recorded in `proactive_log` for auditing.
+
+### Scheduling (`schedule.mjs`)
+
+Timezone-aware, wall-clock arithmetic (no fixed UTC offsets), so DST and Indian half-hour zones behave.
+
+| Command | Behaviour |
+| --- | --- |
+| `/at 09:00 task` | One-off at that local time today, or tomorrow if it has passed |
+| `/at tomorrow 9am task` | Natural day plus clock |
+| `/at 2026-11-05 18:00 task` | Explicit date |
+| `/at mon 10:00 task` | Next matching weekday |
+| `/at in 2h task` | Relative |
+| `/daily 08:30 task` | Recurring at a fixed local time (`daily_time` column keeps it anchored) |
+| `/every 2h task` | Interval, as before |
+| `/scheduled`, `/cancel ID` | List and cancel |
+
+`/timezone Asia/Kolkata` stores the zone on `proactive_settings` and saves it as a memory, so the same fact is not asked
+again. `parseWhenPrefix` and `nextDailyAt` are unit-tested.
+
+### Skills with worked examples
+
+OpenCode now receives every skill, not only the computer one. The OpenCode service copies `/opt/talisman/skills/.` into
+`/config/.opencode/skills/` at start.
+
+| Skill | Recipe file |
+| --- | --- |
+| `computer` | `how_to_browse.md` — wait/read/act/verify, empty pages, bot walls, tables |
+| `booking` | `how_to_book.md` — seat maps, totals, approval gates, payment stop |
+| `research` | `how_to_research.md` — decision framing, two-source rule, timestamping |
+| `documents` | `how_to_documents.md` — invoices, spreadsheets, thin extraction |
+| `planning` | `how_to_plan.md` — private plan, running steps, ending a complex task |
+
+The prompt lists installed skills with their paths, so a model that was trained to look for skills can find them
+without a hardcoded list.
+
+### Browser tools and vision
+
+`computer-service.mjs` gained `text`, `wait` (selector, text, or network idle), `scroll`, `select`, `hover`,
+`back`, `forward`, `newtab`, `switch`, and a `blocked` flag on every read. The default page timeout rose to 20 s, and
+navigation now settles on network idle where possible. Search falls back to DuckDuckGo after Google and Bing, and the
+result selector covers all three. The single `busy` lock now waits up to 20 s for the current action instead of failing
+immediately.
+
+The OpenAI route exposes all of these plus `screenshot`. A screenshot is returned as an image the model can actually
+see (base64 `input_image`, viewport only, capped at 2.5 MB), not just a file path. Tool schemas now mark optional
+parameters as optional instead of forcing empty strings.
+
+### What is still true after this pass
+
+- Proactive messages need an online computer; a suspended container gets no brief.
+- Memory retrieval is lexical, not semantic. There is still no embeddings index, so paraphrased recall depends on the
+  ranked scan.
+- `/daily` is anchored by local time, but a DST transition can shift one run by an hour.
+- The OpenAI path still has no shell or file tools; only the browser namespace.
+- Vision covers a single viewport screenshot per call; no full-page or multi-frame reasoning yet.
+
+## 12. Working on this repo
 
 - Node 22+ (`node:sqlite` is used directly). No bundler, no TypeScript.
 - Keep the control plane free of OpenCode dependencies; only the desktop image installs OpenCode.
@@ -437,7 +556,7 @@ not a product. Do not onboard paying users on this architecture.
 - The dashboard is dependency-free vanilla JS with `innerHTML` templates; every interpolated value must pass
   through `escapeHtml`.
 
-## 12. Open questions
+## 13. Open questions
 
 1. Do we keep one container per user, or move to a pooled browser service with per-session isolation?
 2. Is ChatGPT OAuth acceptable for a paid product in any form, or must the OpenAI path be replaced outright?

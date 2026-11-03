@@ -1,5 +1,6 @@
 #!/usr/bin/with-contenv bash
 cd /config
-mkdir -p /config/.opencode/skills/computer
-cp /opt/talisman/skills/computer/SKILL.md /config/.opencode/skills/computer/SKILL.md
+mkdir -p /config/.opencode/skills
+rm -rf /config/.opencode/skills/computer /config/.opencode/skills/booking /config/.opencode/skills/research /config/.opencode/skills/documents /config/.opencode/skills/planning
+cp -r /opt/talisman/skills/. /config/.opencode/skills/
 exec s6-setuidgid abc /opt/talisman/node_modules/.bin/opencode serve --hostname 127.0.0.1 --port 4096

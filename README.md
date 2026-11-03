@@ -29,12 +29,15 @@ For local testing, pair your Telegram account, open **Models**, and select **Con
 - `/setup` — revisit the optional personal introduction. New accounts are asked a few questions during onboarding.
 - `/mode auto`, `/mode free`, `/mode openai` — change the same model choice shown in the dashboard.
 - `/status` — check the assigned computer.
-- `/kill` — stop queued and running work, discard pending replies, and start the next message with a fresh conversation session. Saved memory, reminders, and recurring schedules remain.
+- `/kill` — stop the current task only. Queued and running work is canceled and pending replies are dropped; saved memory, reminders, schedules, and past conversation are kept.
 - `/remind 10m text`, `/reminders` — schedule and list reminders.
 - `/every 1h task`, `/schedule`, `/stop ID` — run recurring agent tasks and follow-ups.
 - `/watch 30m https://example.com`, `/watches`, `/unwatch ID` — check a public webpage with the assigned browser and alert only when its content changes. An optional CSS selector after the URL narrows the watched region.
 - Forward a PDF, XLSX, CSV, TSV, text, or Markdown file up to 10 MB — extract and save readable text in your account. Use `/documents` and `/document ID` to retrieve it.
-- `/remember key: value`, `/memories`, `/forget key` — manage saved memory.
+- `/remember key: value`, `/memories`, `/memory search words`, `/forget key` — manage saved memory. Facts you state in passing are saved automatically.
+- `/at 09:00 text`, `/at tomorrow 9am text`, `/at 2026-11-05 18:00 text` — run a one-off task at that time.
+- `/daily 08:30 text`, `/scheduled`, `/cancel ID` — a task every day at a fixed time, and the list of everything scheduled.
+- `/timezone Asia/Kolkata`, `/brief 08:30`, `/proactive off` — your clock, your morning brief time, and whether Talisman may message you first.
 - Any other text — send a task to Talisman through the selected model route.
 
 Each account has its own `SOUL.md` and `MEMORY.md` in the private control volume under `/data/users/<account-id>/`. The introduction and explicit `/remember` and `/forget` commands update these files. Their contents are included as account-specific context in the agent's requests.

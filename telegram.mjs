@@ -1,6 +1,9 @@
 import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { answerOnboarding, startOnboarding, syncUserFiles, userSoul } from './user-profile.mjs';
+import { rememberFromMessage, searchMemories, selectMemoryContext, upsertMemory } from './memory.mjs';
+import { formatWhen, nextDailyAt, parseWhenPrefix, validTimeZone } from './schedule.mjs';
+import { proactiveSettings, runProactiveTick } from './proactive.mjs';
 
 const upsertState = (db, key, value) => db.prepare('INSERT INTO app_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, String(value));
 
@@ -42,7 +45,12 @@ export function issueDashboardCode(db, userId, { hash, now }) {
 }
 
 function enqueue(db, userId, computerId, kind, payload) {
-  if (kind === 'message') payload = { ...payload, context: db.prepare('SELECT key,value FROM memories WHERE user_id=? ORDER BY updated_at DESC LIMIT 20').all(userId), soul: userSoul(db, userId) };
+  if (kind === 'message') {
+    rememberFromMessage(db, userId, String(payload.text || ''));
+    const settings = proactiveSettings(db, userId);
+    const memory = selectMemoryContext(db, userId, String(payload.text || ''));
+    payload = { ...payload, context: memory.entries, memoryIndex: memory.index, timeZone: settings.timezone, soul: userSoul(db, userId) };
+  }
   const id = crypto.randomUUID();
   const timestamp = Date.now();
   db.prepare('INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?)').run(id, computerId, userId, kind, JSON.stringify(payload), 'queued', null, timestamp, timestamp);
@@ -86,19 +94,20 @@ export async function handleTelegramMessage(db, message, dependencies) {
     }catch{return send('I could not download that file. Please try again.')}
   }
   if (!text) return send('Send me a text message to start a task.');
-  if (/^\/help(?:@\w+)?$/i.test(text)) return send('Just tell me what you need, or forward a PDF or spreadsheet. You can also use /kill, /status, /setup, /mode, /remind, /every, /watch, /documents, /remember, /memories, and /forget.');
+  if (/^\/help(?:@\w+)?$/i.test(text)) return send('Just tell me what you need, or forward a PDF or spreadsheet.\n\nMemory: /remember, /memories, /memory <search>, /forget\nSchedule: /remind, /at 09:00 …, /daily 08:30 …, /every 2h …, /scheduled, /cancel ID\nSettings: /status, /mode, /timezone, /brief, /proactive on|off, /documents, /watch, /setup\nControl: /kill stops the current work and keeps your memory.');
   if (/^\/kill(?:@\w+)?$/i.test(text)) {
     const timestamp = Date.now();
+    const canceled = db.prepare("SELECT id FROM jobs WHERE user_id=? AND status IN ('queued','running')").all(userId);
     db.exec('BEGIN IMMEDIATE');
-    let stopped;
     try {
-      stopped = db.prepare("UPDATE jobs SET status='canceled',result=?,updated_at=? WHERE user_id=? AND status IN ('queued','running')").run(JSON.stringify({error:'Canceled by user'}),timestamp,userId).changes;
+      db.prepare("UPDATE jobs SET status='canceled',result=?,updated_at=? WHERE user_id=? AND status IN ('queued','running')").run(JSON.stringify({error:'Canceled by user'}),timestamp,userId);
+      const drop = db.prepare('DELETE FROM conversation_messages WHERE user_id=? AND job_id=?');
+      for (const job of canceled) drop.run(userId, job.id);
       db.prepare('UPDATE telegram_requests SET delivered_at=? WHERE user_id=? AND delivered_at IS NULL').run(timestamp,userId);
       db.prepare('DELETE FROM telegram_sessions WHERE user_id=?').run(userId);
-      db.prepare('DELETE FROM conversation_messages WHERE user_id=?').run(userId);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
-    return send(stopped ? 'Stopped. What would you like to do next?' : 'Nothing running right now. What would you like to do next?');
+    return send(canceled.length ? 'Stopped that task. Your memory, notes and schedule are untouched.' : 'Nothing running right now — memory and schedule are intact. What next?');
   }
   if (/^\/start(?:@\w+)?(?:\s|$)/i.test(text) || /^\/pair(?:@\w+)?$/i.test(text)) {
     const code = issueDashboardCode(db, userId, dependencies);
@@ -135,7 +144,7 @@ export async function handleTelegramMessage(db, message, dependencies) {
     if (!Number.isSafeInteger(interval) || interval < 5*60_000 || interval > 30*86_400_000 || !instruction || instruction.length > 1000) return send('Use /every 30m, 2h, or 1d followed by a task of up to 1000 characters. Minimum interval: 5 minutes.');
     if (db.prepare('SELECT count(*) AS n FROM recurring_tasks WHERE user_id=?').get(userId).n >= 20) return send('You have reached the limit of 20 recurring tasks. Stop one before adding another.');
     const id=crypto.randomBytes(4).toString('hex').toUpperCase();
-    db.prepare('INSERT INTO recurring_tasks VALUES(?,?,?,?,?,?,?)').run(id,userId,chatId,instruction,interval,Date.now()+interval,Date.now());
+    db.prepare('INSERT INTO recurring_tasks(id,user_id,chat_id,instruction,interval_ms,next_run_at,created_at) VALUES(?,?,?,?,?,?,?)').run(id,userId,chatId,instruction,interval,Date.now()+interval,Date.now());
     return send(`Scheduled ${id}. I will run it every ${recurring[1]}${recurring[2].toLowerCase()}. Use /stop ${id} to cancel.`);
   }
   if (/^\/schedule(?:@\w+)?$/i.test(text)) {
@@ -179,8 +188,13 @@ export async function handleTelegramMessage(db, message, dependencies) {
     return send('I’ll remember that.');
   }
   if (/^\/memories(?:@\w+)?$/i.test(text)) {
-    const rows = db.prepare('SELECT key,value FROM memories WHERE user_id=? ORDER BY key LIMIT 20').all(userId);
-    return send(rows.length ? rows.map(row => `${row.key}: ${row.value}`).join('\n') : 'No saved memories yet. Use /remember name: value.');
+    const rows = db.prepare('SELECT key,value,kind FROM memories WHERE user_id=? ORDER BY importance DESC,updated_at DESC LIMIT 25').all(userId);
+    return send(rows.length ? `I keep ${db.prepare('SELECT count(*) AS n FROM memories WHERE user_id=?').get(userId).n} things for you. Newest and most useful:\n${rows.map(row => `${row.key}: ${row.value}`).join('\n')}` : 'No saved memories yet. Use /remember name: value.');
+  }
+  const memoryLookup = /^\/memory(?:@\w+)?\s+([\s\S]+)$/i.exec(text);
+  if (memoryLookup) {
+    const rows = searchMemories(db, userId, memoryLookup[1]);
+    return send(rows.length ? rows.map(row => `${row.key}: ${row.value}`).join('\n') : 'Nothing saved on that yet.');
   }
   const forget = /^\/forget(?:@\w+)?\s+(.+)$/i.exec(text);
   if (forget) {
@@ -194,6 +208,65 @@ export async function handleTelegramMessage(db, message, dependencies) {
     const removed=db.prepare('DELETE FROM memories WHERE user_id=? AND lower(value)=lower(?)').run(userId,value).changes;
     if(removed)try{syncUserFiles(db,dependencies.dataDir,userId)}catch(error){console.error('Memory file sync failed:',error.message)}
     return send(removed?'Okay, I’ve forgotten that.':'I couldn’t find that in what I remember.');
+  }
+  if (/^\/timezone(?:@\w+)?(?:\s.*)?$/i.test(text)) {
+    const value = text.replace(/^\/timezone(?:@\w+)?\s*/i, '').trim();
+    const settings = proactiveSettings(db, userId);
+    if (!value) return send(`I have you in ${settings.timezone}. Send /timezone Asia/Kolkata to change it.`);
+    if (!validTimeZone(value)) return send('That timezone name did not look right. Try something like Asia/Kolkata or Europe/London.');
+    db.prepare('UPDATE proactive_settings SET timezone=? WHERE user_id=?').run(value, userId);
+    upsertMemory(db, userId, { key: 'timezone', value, kind: 'fact', importance: 5 }, Date.now());
+    try { syncUserFiles(db, dependencies.dataDir, userId); } catch (error) { console.error('Profile file sync failed:', error.message); }
+    return send(`Set — I will use ${value} from now on.`);
+  }
+  if (/^\/proactive(?:@\w+)?(?:\s+(?:on|off))?$/i.test(text)) {
+    const settings = proactiveSettings(db, userId);
+    const choice = /^\/proactive(?:@\w+)?\s+(on|off)/i.exec(text)?.[1]?.toLowerCase();
+    if (!choice) return send(settings.enabled ? `I check in on my own: a short morning brief at ${String(settings.brief_hour).padStart(2, '0')}:${String(settings.brief_minute).padStart(2, '0')} ${settings.timezone}, plus a nudge if I asked you something and you did not answer. /proactive off stops it.` : 'Proactive check-ins are off. /proactive on turns them back on.');
+    db.prepare('UPDATE proactive_settings SET enabled=? WHERE user_id=?').run(choice === 'on' ? 1 : 0, userId);
+    return send(choice === 'on' ? 'On. I will speak first when there is something worth saying.' : 'Off. I will only reply when you message me.');
+  }
+  if (/^\/brief(?:@\w+)?(?:\s.*)?$/i.test(text)) {
+    const value = /^\/brief(?:@\w+)?\s+(\d{1,2}):(\d{2})$/i.exec(text);
+    if (value && +value[1] <= 23 && +value[2] <= 59) {
+      db.prepare('UPDATE proactive_settings SET brief_hour=?,brief_minute=? WHERE user_id=?').run(+value[1], +value[2], userId);
+      return send(`Morning brief set for ${String(value[1]).padStart(2, '0')}:${value[2]}.`);
+    }
+    const settings = proactiveSettings(db, userId);
+    return send(`Morning brief at ${String(settings.brief_hour).padStart(2, '0')}:${String(settings.brief_minute).padStart(2, '0')} ${settings.timezone}. Send /brief 08:30 to change it, /proactive off to stop check-ins.`);
+  }
+  const atCommand = /^\/at(?:@\w+)?\s+([\s\S]+)$/i.exec(text);
+  if (atCommand) {
+    const settings = proactiveSettings(db, userId);
+    const parsed = parseWhenPrefix(atCommand[1], settings.timezone);
+    if (!parsed || !parsed.rest) return send('Use /at 09:00 call the dentist, /at tomorrow 9am book the cab, or /at 2026-11-05 09:00 send the invoice.');
+    if (parsed.at < Date.now() + 30_000) return send('That time has already passed. Send a future time.');
+    const id = crypto.randomBytes(4).toString('hex').toUpperCase();
+    db.prepare('INSERT INTO scheduled_tasks(id,user_id,chat_id,instruction,run_at,status,created_at) VALUES(?,?,?,?,?,?,?)').run(id, userId, chatId, parsed.rest.slice(0, 500), parsed.at, 'pending', Date.now());
+    return send(`Scheduled ${id} for ${formatWhen(parsed.at, settings.timezone)}: ${parsed.rest.slice(0, 120)}\nSend /cancel ${id} to stop it.`);
+  }
+  const dailyCommand = /^\/daily(?:@\w+)?\s+(\d{1,2}):(\d{2})\s+([\s\S]+)$/i.exec(text);
+  if (dailyCommand) {
+    const hour = +dailyCommand[1], minute = +dailyCommand[2];
+    if (hour > 23 || minute > 59) return send('Use /daily 08:30 followed by the task.');
+    const settings = proactiveSettings(db, userId);
+    const id = crypto.randomBytes(4).toString('hex').toUpperCase();
+    const label = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    db.prepare('INSERT INTO recurring_tasks(id,user_id,chat_id,instruction,interval_ms,next_run_at,created_at,daily_time) VALUES(?,?,?,?,?,?,?,?)').run(id, userId, chatId, `Daily ${label} — ${dailyCommand[3].trim().slice(0, 400)}`, 86_400_000, nextDailyAt(hour, minute, settings.timezone), Date.now(), label);
+    return send(`Every day at ${label}, I will run: ${dailyCommand[3].trim().slice(0, 120)}\nID ${id}. /cancel ${id} stops it.`);
+  }
+  if (/^\/scheduled(?:@\w+)?$/i.test(text)) {
+    const settings = proactiveSettings(db, userId);
+    const rows = db.prepare("SELECT id,instruction,run_at FROM scheduled_tasks WHERE user_id=? AND status='pending' ORDER BY run_at LIMIT 20").all(userId);
+    const recurring = db.prepare('SELECT id,instruction,next_run_at FROM recurring_tasks WHERE user_id=? ORDER BY next_run_at LIMIT 20').all(userId);
+    if (!rows.length && !recurring.length) return send('Nothing scheduled yet. Use /at 09:00 …, /daily 08:30 …, or /every 2h …');
+    return send([...rows.map(row => `${row.id} · ${formatWhen(row.run_at, settings.timezone)} · ${row.instruction}`), ...recurring.map(row => `${row.id} · ${formatWhen(row.next_run_at, settings.timezone)} · ${row.instruction}`)].join('\n'));
+  }
+  const cancelCommand = /^\/cancel(?:@\w+)?\s+([A-Fa-f0-9]{8})$/i.exec(text);
+  if (cancelCommand) {
+    const id = cancelCommand[1].toUpperCase();
+    const removed = db.prepare('DELETE FROM scheduled_tasks WHERE id=? AND user_id=?').run(id, userId).changes + db.prepare('DELETE FROM recurring_tasks WHERE id=? AND user_id=?').run(id, userId).changes;
+    return send(removed ? 'Canceled that one.' : 'I could not find that job.');
   }
   const provision = db.prepare('SELECT status,error FROM computer_provisioning WHERE computer_id=?').get(computer.id);
   const online = computer.last_seen && Date.now() - computer.last_seen < 45_000;
@@ -269,7 +342,8 @@ export async function startTelegramBot({ db, hash, random, now, dataDir }) {
         try {
           const jobId=enqueue(db,task.user_id,computer.id,'message',{text:`Scheduled task: ${task.instruction}`});
           db.prepare('INSERT INTO telegram_requests(job_id,user_id,chat_id,created_at) VALUES(?,?,?,?)').run(jobId,task.user_id,task.chat_id,Date.now());
-          db.prepare('UPDATE recurring_tasks SET next_run_at=? WHERE id=?').run(Date.now()+task.interval_ms,task.id);
+          const nextRun = task.daily_time ? nextDailyAt(+String(task.daily_time).split(':')[0], +String(task.daily_time).split(':')[1], proactiveSettings(db,task.user_id).timezone) : Date.now()+task.interval_ms;
+          db.prepare('UPDATE recurring_tasks SET next_run_at=? WHERE id=?').run(nextRun,task.id);
           db.exec('COMMIT');
         } catch(error){db.exec('ROLLBACK');throw error;}
       }
@@ -293,6 +367,19 @@ export async function startTelegramBot({ db, hash, random, now, dataDir }) {
       }
     }catch(error){console.error('Page watch retry:',error.message)}
   },30_000);
+  setInterval(() => {
+    try {
+      const due = db.prepare("SELECT * FROM scheduled_tasks WHERE status='pending' AND run_at<=? ORDER BY run_at LIMIT 20").all(Date.now());
+      for (const task of due) {
+        const computer = db.prepare('SELECT * FROM computers WHERE user_id=? ORDER BY created_at LIMIT 1').get(task.user_id);
+        if (!computer) continue;
+        const jobId = enqueue(db, task.user_id, computer.id, 'message', { text: task.instruction });
+        db.prepare('INSERT INTO telegram_requests(job_id,user_id,chat_id,created_at) VALUES(?,?,?,?)').run(jobId, task.user_id, task.chat_id, Date.now());
+        db.prepare("UPDATE scheduled_tasks SET status='done' WHERE id=?").run(task.id);
+      }
+    } catch (error) { console.error('Scheduled task retry:', error.message); }
+  }, 20_000);
+  setInterval(() => runProactiveTick(db, sendChunks).catch(error => console.error('Proactive retry:', error.message)), 60_000);
   let deliveringResults = false;
   setInterval(async () => {
     if (deliveringResults) return;

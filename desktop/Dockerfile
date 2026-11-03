@@ -4,7 +4,7 @@ COPY --from=node /usr/local /usr/local
 WORKDIR /opt/talisman
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-COPY worker.mjs ./
+COPY worker.mjs prompt.mjs ./
 COPY computer.mjs computer-service.mjs ./
 COPY document-tools.mjs ./
 COPY prompts ./prompts
