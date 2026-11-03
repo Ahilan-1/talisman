@@ -28,6 +28,7 @@ export function ensureTelegramAccount(db, message, { hash, random, now, dataDir 
     db.prepare('INSERT INTO computers(id,user_id,name,created_at) VALUES(?,?,?,?)').run(computerId, userId, 'My cloud computer', timestamp);
     db.prepare('INSERT INTO computer_provisioning(computer_id,status,updated_at) VALUES(?,?,?)').run(computerId, 'pending', timestamp);
     startOnboarding(db, userId);
+    db.prepare('INSERT OR IGNORE INTO proactive_settings(user_id) VALUES(?)').run(userId);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');

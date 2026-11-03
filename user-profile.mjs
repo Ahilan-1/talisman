@@ -51,7 +51,7 @@ export function answerOnboarding(db, userId, text) {
   if (profile.step === 'preferences') {
     if (!skip && value.length > 500) return 'Could you keep that to a few sentences? I can remember more later.';
     db.prepare("UPDATE user_profiles SET preferences=?,step='done',complete_at=? WHERE user_id=?").run(skip ? null : value, Date.now(), userId);
-    return 'Thanks, I’ve got a better feel for you now. Just message me naturally whenever you need something. You can change what I remember with /remember and /forget.';
+    return 'Thanks, I’ve got a better feel for you now. Just message me naturally whenever you need something. One thing so my timing is right: send /timezone with your zone (for example /timezone Asia/Kolkata). You can change what I remember with /remember and /forget.';
   }
   return null;
 }
