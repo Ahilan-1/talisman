@@ -1,0 +1,3 @@
+#!/usr/bin/with-contenv bash
+cd /config
+exec s6-setuidgid abc node /opt/talisman/computer-service.mjs
