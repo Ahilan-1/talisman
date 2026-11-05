@@ -3,8 +3,16 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { ensureMemorySchema, extractFromMessage, rememberFromMessage, searchMemories, selectMemoryContext, upsertMemory } from '../memory.mjs';
 import { localDateKey, nextDailyAt, parseWhenPrefix, validTimeZone, zonedParts } from '../schedule.mjs';
+import { selectResponseOutput } from '../openai-connection.mjs';
 
 const fresh = () => { const db = new DatabaseSync(':memory:'); ensureMemorySchema(db); return db; };
+
+test('streamed browser actions survive an empty final output array', () => {
+  const action = { type: 'function_call', name: 'search', call_id: 'call_1', arguments: '{"query":"bus timetable"}' };
+  const items = new Map([[1, action], [0, { type: 'reasoning', id: 'reason_1' }]]);
+  assert.deepEqual(selectResponseOutput({ output: [] }, items), [{ type: 'reasoning', id: 'reason_1' }, action]);
+  assert.deepEqual(selectResponseOutput({ output: [action] }, items), [action]);
+});
 
 test('memory keeps at least 90% of saved facts reachable in context', () => {
   const db = fresh();

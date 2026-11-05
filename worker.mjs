@@ -37,7 +37,10 @@ async function openAIComputer(job,p){
    if(Date.now()-started>5*60_000)throw Error('The computer task took too long. Please try a narrower request.');
    const response=await request(`${control}/api/worker/openai/step`,{method:'POST',headers:{...auth,'content-type':'application/json'},body:JSON.stringify({text:p.text,context:p.context||[],soul:p.soul||'',input,timeZone:p.timeZone||'UTC'}),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(140000)])});
    const calls=Array.isArray(response.calls)?response.calls:[];
-   if(!calls.length)return {text:response.text||'I checked, but I could not verify a result yet.'};
+   if(!calls.length){
+    if(!String(response.text||'').trim())throw Error('The model returned no answer or browser action');
+    return {text:response.text};
+   }
    if(!Array.isArray(response.output)||!response.output.length)throw Error('Model tool call was incomplete');
    input.push(...response.output);
    for(const call of calls){

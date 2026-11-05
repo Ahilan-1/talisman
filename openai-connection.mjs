@@ -11,6 +11,12 @@ const tokenEndpoint = `${ISSUER}/api/accounts/oauth/token`;
 const random = () => crypto.randomBytes(32).toString('base64url');
 const digest = value => crypto.createHash('sha256').update(value).digest('base64url');
 
+export function selectResponseOutput(completed, outputItems) {
+  return Array.isArray(completed.output) && completed.output.length
+    ? completed.output
+    : [...outputItems].sort((a, b) => a[0] - b[0]).map(([, value]) => value);
+}
+
 function parseJwt(token) {
   const parts = String(token || '').split('.');
   if (parts.length !== 3) throw Error('Invalid identity token');
@@ -193,7 +199,11 @@ export function createOpenAIConnection(db, dataDir) {
       }
     }
     if (!completed) throw Error('OpenAI tool response did not complete');
-    const output = Array.isArray(completed.output) ? completed.output : [...outputItems].sort((a, b) => a[0] - b[0]).map(([, value]) => value);
+    const output = selectResponseOutput(completed, outputItems);
+    if (!output.length && !reply.trim()) {
+      console.error('OpenAI empty tool response:', JSON.stringify({ status: completed.status, incomplete: completed.incomplete_details, error: completed.error, outputCount: outputItems.size }));
+      throw Error('OpenAI returned no answer or browser action');
+    }
     return { text: reply, output, calls: output.filter(item => item.type === 'function_call').map(item => ({ name: item.name, arguments: item.arguments, callId: item.call_id })) };
   }
   const disconnect = userId => { db.prepare('DELETE FROM openai_connections WHERE user_id=?').run(userId); cache.delete(userId); };
