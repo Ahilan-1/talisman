@@ -11,6 +11,14 @@ const shots = path.join(root, 'screenshots');
 const profile = path.join(root, 'profile');
 fs.mkdirSync(shots, { recursive: true, mode: 0o700 });
 let context, page, busy = false;
+const control = (process.env.TALISMAN_URL || 'http://talisman:3000').replace(/\/$/, '');
+async function arlong(route, data) {
+  if (!process.env.TALISMAN_WORKER_KEY) throw Error('Arlong worker access is unavailable');
+  const response = await fetch(`${control}/api/worker/arlong/${route}`, { method: 'POST', headers: { authorization: `Bearer ${process.env.TALISMAN_WORKER_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify(data), signal: AbortSignal.timeout(route === 'search' ? 25_000 : 35_000) });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw Error(result.error || `Arlong ${route} failed (${response.status})`);
+  return result;
+}
 
 async function clearStaleProfileLock() {
   const { stdout } = await run('ps', ['-eo', 'comm=,args='], { timeout: 5000 });
@@ -118,6 +126,12 @@ async function search(tab, query) {
 
 async function action(data) {
   const kind = String(data.action || '');
+  if (kind === 'extract') return arlong('extract', { url: publicUrl(data.url) });
+  if (kind === 'screen') return arlong('screen', { url: data.url ? publicUrl(data.url) : '', text: String(data.text || '') });
+  if (kind === 'search') {
+    const query = String(data.query || '');
+    try { const result = await arlong('search', { query }); if (result.results?.length) return result; } catch {}
+  }
   if (kind === 'desktop-screenshot') {
     const file = path.join(shots, `desktop-${Date.now()}.png`);
     await run('xfce4-screenshooter', ['--fullscreen', '--save', file], { timeout: 15_000, env: { ...process.env, DISPLAY: ':1' } });
@@ -149,8 +163,15 @@ async function action(data) {
     }, query.toLowerCase());
   }
   if (kind === 'read') {
-    await loadPage(tab, data.url);
-    return ensureContent(tab, data.selector);
+    const url = publicUrl(data.url);
+    try {
+      await loadPage(tab, url);
+      const result = await ensureContent(tab, data.selector);
+      if (!result.blocked) return result;
+      try { return await arlong('extract', { url }); } catch { return result; }
+    } catch (error) {
+      try { return await arlong('extract', { url }); } catch { throw error; }
+    }
   }
   if (kind === 'text') return ensureContent(tab, data.selector);
   if (kind === 'wait') {
@@ -208,7 +229,12 @@ async function action(data) {
     fs.chmodSync(file, 0o600);
     return { screenshot: file, url: tab.url(), title: await tab.title() };
   } else if (kind !== 'inspect') throw Error('Unknown computer action');
-  return summary(tab);
+  const result = await summary(tab);
+  if (kind === 'open' && /sorry, you have been blocked|attention required! \| cloudflare|access denied|verify you are human|captcha/i.test(result.text)) {
+    result.blocked = true;
+    result.note = 'This browser reached an access challenge. Try extract for public page evidence, or another source.';
+  }
+  return result;
 }
 
 http.createServer(async (req, res) => {

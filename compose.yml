@@ -13,6 +13,8 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-0}
       PUBLIC_URL: ${PUBLIC_URL:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      ARLONG_API_KEY: ${ARLONG_API_KEY:-}
+      arlong: ${arlong:-}
     volumes:
       - talisman_data:/data
     restart: unless-stopped

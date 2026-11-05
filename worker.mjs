@@ -14,7 +14,7 @@ let state=process.env.TALISMAN_WORKER_KEY?{key:process.env.TALISMAN_WORKER_KEY,c
 async function request(url,options={}){const r=await fetch(url,{...options,signal:options.signal||AbortSignal.timeout(options.timeoutMs||120000)});const value=await r.json().catch(()=>({}));if(!r.ok)throw Error(value.error||`HTTP ${r.status}`);return value;}
 if(!state){const code=process.env.TALISMAN_PAIR_CODE||process.argv[2];if(!code)throw Error('Set TALISMAN_PAIR_CODE or pass the pairing code as an argument');state=await request(`${control}/api/worker/pair`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code})});fs.writeFileSync(file,JSON.stringify(state),{mode:0o600});console.log('Computer paired');}
 const auth={'authorization':`Bearer ${state.key}`};
-const allowed=new Set(['search','open','read','text','find','inspect','wait','scroll','click','fill','select','hover','press','back','forward','newtab','switch','screenshot']);
+const allowed=new Set(['search','extract','screen','open','read','text','find','inspect','wait','scroll','click','fill','select','hover','press','back','forward','newtab','switch','screenshot']);
 async function oc(route,options={}){return request(`${opencode}${route}`,options);}
 async function imageInput(screenshotPath){
  try{

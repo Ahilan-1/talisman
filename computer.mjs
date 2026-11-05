@@ -3,6 +3,8 @@ const data = { action };
 if (action === 'search') data.query = args.join(' ');
 else if (action === 'find') data.query = args.join(' ');
 else if (action === 'open') data.url = args[0];
+else if (action === 'extract') data.url = args[0];
+else if (action === 'screen') { if (/^https?:\/\//i.test(args[0] || '')) data.url = args[0]; else data.text = args.join(' '); }
 else if (action === 'click' || action === 'fill') { data.selector = args[0]; data.value = args.slice(1).join(' '); }
 else if (action === 'read') { data.url = args[0]; data.selector = args.slice(1).join(' '); }
 else if (action === 'press') data.key = args[0];
