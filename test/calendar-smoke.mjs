@@ -27,12 +27,21 @@ try{
   await page.locator('#setup-form input[name="email"]').fill('smoke@example.test');
   await page.locator('#setup-form input[name="password"]').fill('long password for smoke');
   await page.getByRole('button',{name:'Create account'}).click();
+  if(process.env.TALISMAN_SCREENSHOT_DIR){
+    const output=process.env.TALISMAN_SCREENSHOT_DIR;
+    await page.screenshot({path:path.join(output,'workspace.png'),fullPage:true});
+    await page.getByRole('button',{name:'Inbox'}).click();
+    await page.screenshot({path:path.join(output,'inbox.png'),fullPage:true});
+  }
   await page.getByRole('button',{name:'Calendar'}).click();
   await page.locator('#talisman-calendar button').first().waitFor();
+  if(process.env.TALISMAN_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.TALISMAN_SCREENSHOT_DIR,'calendar.png'),fullPage:true});
+  await page.getByRole('button',{name:'Add calendar event'}).click();
   await page.getByRole('textbox',{name:'Title'}).fill('Smoke event');
   await page.locator('input[name="start"]').fill('2026-11-06T09:00');
   await page.locator('input[name="end"]').fill('2026-11-06T10:00');
   await page.getByRole('button',{name:'Add event'}).click();
-  await page.getByText('Event added.').waitFor();
+  await page.locator('#event-dialog').waitFor({state:'hidden'});
+  await page.getByText('Smoke event').waitFor();
   console.log('Calendar browser smoke passed');
 }finally{await browser?.close();app.kill();await new Promise(resolve=>app.once('exit',resolve));rmSync(dataDir,{recursive:true,force:true})}

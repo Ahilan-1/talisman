@@ -15,11 +15,20 @@ Them: *"Jailer 2, Chennai, Nov 9, two tickets."*
    node /opt/talisman/computer.mjs find "9 Nov"
    ```
 3. **Choose a screening and read the seat map.** Use a screenshot when the map is graphical.
+
+   **Important: Never invent a URL to reach the seat map.** Always navigate through the UI:
+
    ```sh
    node /opt/talisman/computer.mjs click 'a[data-showtime="21:40"]'
-   node /opt/talisman/computer.mjs wait ".seat-map"
+   node /opt/talisman/computer.mjs wait ".seat-map" 15000
    node /opt/talisman/computer.mjs screenshot
+   node /opt/talisman/computer.mjs find "Available"
    ```
+
+   If the seat map does not appear, use the browser's back button and try clicking the
+   showtime link again, or look for a "View seat map" or "Select seats" button on the
+   listing page.
+
 4. **Select exactly two adjacent seats.** Fill the count, then click seats that the legend marks available.
 5. **Read the total before asking.** `text` on the summary panel. Never estimate.
 6. **Ask for approval in one line:**

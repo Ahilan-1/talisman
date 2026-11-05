@@ -5,7 +5,8 @@ import { rememberFromMessage, searchMemories, selectMemoryContext, upsertMemory 
 import { formatWhen, nextDailyAt, parseWhenPrefix, validTimeZone } from './schedule.mjs';
 import { proactiveSettings, quietNow, runProactiveTick } from './proactive.mjs';
 import { formatChunks } from './telegram-format.mjs';
-import { decideApproval, taskReceipt, logTaskEvent } from './orchestration.mjs';
+import { decideApproval, taskReceipt, logTaskEvent, answerQuestion } from './orchestration.mjs';
+import { ensureTaskInboxSchema, createTaskThread } from './task-inbox.mjs';
 
 const upsertState = (db, key, value) => db.prepare('INSERT INTO app_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, String(value));
 
@@ -48,6 +49,7 @@ export function issueDashboardCode(db, userId, { hash, now }) {
 }
 
 function enqueue(db, userId, computerId, kind, payload) {
+  ensureTaskInboxSchema(db);
   if (kind === 'message') {
     rememberFromMessage(db, userId, String(payload.text || ''));
     const settings = proactiveSettings(db, userId);
@@ -56,7 +58,8 @@ function enqueue(db, userId, computerId, kind, payload) {
   }
   const id = crypto.randomUUID();
   const timestamp = Date.now();
-  db.prepare('INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?)').run(id, computerId, userId, kind, JSON.stringify(payload), 'queued', null, timestamp, timestamp);
+  const threadId=createTaskThread(db,userId,payload.text||payload.url||payload.filename||kind,timestamp);
+  db.prepare('INSERT INTO jobs(id,computer_id,user_id,kind,payload,status,result,created_at,updated_at,thread_id) VALUES(?,?,?,?,?,?,?,?,?,?)').run(id, computerId, userId, kind, JSON.stringify(payload), 'queued', null, timestamp, timestamp, threadId);
   if (kind === 'message') db.prepare("INSERT INTO conversation_messages(user_id,job_id,role,text,created_at) VALUES(?,?,'user',?,?)").run(userId,id,String(payload.text||'').slice(0,20000),timestamp);
   return id;
 }
@@ -119,6 +122,15 @@ export async function handleTelegramMessage(db, message, dependencies) {
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     return send(canceled.length ? 'Stopped that task. Your memory, notes and schedule are untouched.' : 'Nothing running right now — memory and schedule are intact. What next?');
+  }
+  // A running task can pause to ask for a phone number, an OTP, a choice or permission.
+  // While a question is pending, the next plain message answers it instead of starting a new task.
+  if (!text.startsWith('/')) {
+    const answered = answerQuestion(db, userId, text);
+    if (answered) {
+      db.prepare('UPDATE jobs SET updated_at=? WHERE id=?').run(Date.now(), answered.job_id);
+      return send(answered.kind === 'otp' ? 'Got the code — using it now.' : answered.kind === 'confirm' || answered.kind === 'choice' ? 'Thanks, continuing with that.' : 'Got it — using that now.');
+    }
   }
   if (/^\/start(?:@\w+)?(?:\s|$)/i.test(text) || /^\/pair(?:@\w+)?$/i.test(text)) {
     const code = issueDashboardCode(db, userId, dependencies);
@@ -282,13 +294,13 @@ export async function handleTelegramMessage(db, message, dependencies) {
   const provision = db.prepare('SELECT status,error FROM computer_provisioning WHERE computer_id=?').get(computer.id);
   const online = computer.last_seen && Date.now() - computer.last_seen < 45_000;
   if (/^\/status(?:@\w+)?$/i.test(text)) return send(online ? 'Your cloud computer is online.' : provision?.status === 'failed' ? `Computer setup failed: ${provision.error || 'unknown error'}` : `Your cloud computer is ${provision?.status || 'starting'}. I will be ready when it comes online.`);
-  if (/^\/(?:models|model)(?:@\w+)?(?:\s|$)/i.test(text)) return send('You can choose Automatic, Free models, or OpenAI in your dashboard’s Models tab. I keep the specific model private.');
+  if (/^\/(?:models|model)(?:@\w+)?(?:\s|$)/i.test(text)) return send('You can choose Automatic, Free models, or OpenAI in your dashboard’s Integrations tab. I keep the specific model private.');
   const modeCommand=/^\/mode(?:@\w+)?(?:\s+(automatic|auto|free|openai))?$/i.exec(text);
   if(modeCommand){
     const current=db.prepare('SELECT mode FROM model_preferences WHERE user_id=?').get(userId)?.mode||'automatic';
     if(!modeCommand[1])return send(`I’m using ${current === 'free' ? 'free models' : current === 'openai' ? 'OpenAI' : 'automatic selection'} right now. Send /mode free, /mode openai, or /mode auto to change it.`);
     const mode=modeCommand[1].toLowerCase()==='auto'?'automatic':modeCommand[1].toLowerCase();
-    if(mode==='openai'&&!db.prepare('SELECT 1 FROM openai_connections WHERE user_id=?').get(userId))return send('Connect your OpenAI account in the dashboard’s Models tab first.');
+    if(mode==='openai'&&!db.prepare('SELECT 1 FROM openai_connections WHERE user_id=?').get(userId))return send('Connect your OpenAI account in the dashboard’s Integrations tab first.');
     db.prepare('INSERT INTO model_preferences(user_id,mode) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET mode=excluded.mode').run(userId,mode);
     return send(mode==='free'?'Okay, I’ll use free models. They still have usage limits.':mode==='openai'?'Okay, I’ll use your connected OpenAI account and my assigned computer when a task needs it.':'Okay, I’ll choose automatically based on the task.');
   }
@@ -369,7 +381,7 @@ export async function startTelegramBot({ db, hash, random, now, dataDir }) {
         if(db.prepare('SELECT 1 FROM telegram_requests WHERE user_id=? AND delivered_at IS NULL LIMIT 1').get(task.user_id)) continue;
         db.exec('BEGIN IMMEDIATE');
         try {
-          const jobId=enqueue(db,task.user_id,computer.id,'message',{text:`Scheduled task: ${task.instruction}`});
+          const jobId=enqueue(db,task.user_id,computer.id,'message',{text:`Scheduled task: ${task.instruction}`,scheduleId:task.id});
           db.prepare('INSERT INTO telegram_requests(job_id,user_id,chat_id,created_at) VALUES(?,?,?,?)').run(jobId,task.user_id,task.chat_id,Date.now());
           const nextRun = task.daily_time ? nextDailyAt(+String(task.daily_time).split(':')[0], +String(task.daily_time).split(':')[1], proactiveSettings(db,task.user_id).timezone) : Date.now()+task.interval_ms;
           db.prepare('UPDATE recurring_tasks SET next_run_at=? WHERE id=?').run(nextRun,task.id);
@@ -402,7 +414,7 @@ export async function startTelegramBot({ db, hash, random, now, dataDir }) {
       for (const task of due) {
         const computer = db.prepare('SELECT * FROM computers WHERE user_id=? ORDER BY created_at LIMIT 1').get(task.user_id);
         if (!computer) continue;
-        const jobId = enqueue(db, task.user_id, computer.id, 'message', { text: task.instruction });
+        const jobId = enqueue(db, task.user_id, computer.id, 'message', { text: task.instruction, scheduleId: task.id });
         db.prepare('INSERT INTO telegram_requests(job_id,user_id,chat_id,created_at) VALUES(?,?,?,?)').run(jobId, task.user_id, task.chat_id, Date.now());
         db.prepare("UPDATE scheduled_tasks SET status='done' WHERE id=?").run(task.id);
       }

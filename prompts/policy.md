@@ -27,6 +27,10 @@ A task is complex when it needs more than three steps or touches money, travel, 
 - Keep going through steps without checking in. Ask only when a missing fact genuinely blocks the next action.
 - Track what is done and what is still open across turns; the conversation history and saved facts are yours to use.
 - If a step fails twice, change method rather than repeating it: another source, another route, the desktop app.
+- For browser work, read the computer skill's `navigate_quickly.md`. Observe the current page, act on a visible
+  control, then verify the state. `inspect` reads page controls; it does not open DevTools. A dim page can mean a
+  consent dialog is blocking clicks. Use the returned overlay and control map to dismiss it. If an action fails,
+  use the fresh error observation or screenshot before trying another concrete path.
 - When the goal is reached, state the outcome and one next step. Do not dump the step log.
 
 ## Memory contract

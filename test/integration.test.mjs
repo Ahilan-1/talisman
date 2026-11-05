@@ -21,7 +21,7 @@ test('Telegram-only chat, single-account pairing, legacy linking, and connected 
  const port=39000+Math.floor(Math.random()*1000),base=`http://127.0.0.1:${port}`;
  const app=spawn(process.execPath,['server.mjs'],{cwd:process.cwd(),env:{...process.env,HOST:'127.0.0.1',PORT:String(port),TALISMAN_DATA_DIR:path.join(temp,'db'),TELEGRAM_ENABLED:'0',OPENAI_LOCAL_SIGNIN:'0'},stdio:'inherit'});t.after(()=>app.kill());await ready(`${base}/api/health`);
  async function call(route,method='GET',payload,cookie,auth){const r=await fetch(`${base}/api${route}`,{method,headers:{...(payload?{'content-type':'application/json'}:{}),...(cookie?{cookie}:{}),...(auth?{authorization:`Bearer ${auth}`}:{})},body:payload?JSON.stringify(payload):undefined});return {status:r.status,data:await r.json(),cookie:r.headers.get('set-cookie')?.split(';')[0]}}
- const db=new DatabaseSync(path.join(temp,'db','talisman.sqlite'));t.after(()=>db.close());
+ const db=new DatabaseSync(path.join(temp,'db','talisman.sqlite'));db.exec('PRAGMA busy_timeout=5000');t.after(()=>db.close());
  const sent=[];
  const deps={hash:value=>crypto.createHash('sha256').update(value).digest('hex'),random:()=>crypto.randomBytes(24).toString('base64url'),now:()=>Date.now(),dataDir:path.join(temp,'db'),send:async(chat,text)=>sent.push({chat,text}),publicUrl:base};
  await handleTelegramMessage(db,{chat:{id:111,type:'private'},from:{id:111,username:'one'},text:'/start'},deps);
@@ -107,7 +107,7 @@ test('Telegram-only chat, single-account pairing, legacy linking, and connected 
  const beforeBaseline=sent.length;
  for(const [extracted,expectedSilent] of [['Original page',true],['Updated page',true]]){
    const watchJob=crypto.randomUUID();
-   db.prepare('INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?)').run(watchJob,computerId,first.data.id,'watch',JSON.stringify({watchId,url:'https://example.com/'}),'running',null,Date.now(),Date.now());
+   db.prepare('INSERT INTO jobs(id,computer_id,user_id,kind,payload,status,result,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)').run(watchJob,computerId,first.data.id,'watch',JSON.stringify({watchId,url:'https://example.com/'}),'running',null,Date.now(),Date.now());
    db.prepare('INSERT INTO telegram_requests(job_id,user_id,chat_id,created_at) VALUES(?,?,?,?)').run(watchJob,first.data.id,'111',Date.now());
    assert.equal((await call(`/worker/jobs/${watchJob}`,'POST',{result:{watchId,extracted,title:'Example Domain'}},undefined,workerKey)).status,200);
    assert.equal(!!JSON.parse(db.prepare('SELECT result FROM jobs WHERE id=?').get(watchJob).result).silent,expectedSilent);
@@ -161,7 +161,7 @@ test('Telegram-only chat, single-account pairing, legacy linking, and connected 
  await handleTelegramMessage(db,{chat:{id:111,type:'private'},from:{id:111,username:'one'},text:'/documents'},deps);
  assert.match(sent.at(-1).text,/invoice.csv/);
  const failedId=crypto.randomUUID();
- db.prepare('INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?)').run(failedId,computerId,first.data.id,'message','{}','failed',JSON.stringify({error:'OpenCode access has reached its usage limit. Private model: test-model'}),Date.now(),Date.now());
+ db.prepare('INSERT INTO jobs(id,computer_id,user_id,kind,payload,status,result,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)').run(failedId,computerId,first.data.id,'message','{}','failed',JSON.stringify({error:'OpenCode access has reached its usage limit. Private model: test-model'}),Date.now(),Date.now());
  db.prepare('INSERT INTO telegram_requests(job_id,user_id,chat_id,created_at) VALUES(?,?,?,?)').run(failedId,first.data.id,'111',Date.now());
  await deliverTelegramResults(db,deps.send);
  assert.match(sent.at(-1).text,/free model limit/);

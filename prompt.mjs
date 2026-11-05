@@ -90,6 +90,6 @@ export function buildToolPrompt({ timeZone = 'UTC', soul = '', memory = null, to
     tools,
     soul ? `What you know about them:\n${soul}` : '',
     `Remembered facts:\n${memoryBlock(memory)}`,
-    'Plan silently, call one tool at a time when the world needs checking, verify, then answer as yourself.',
+    'Before each group of tool calls, write one short sentence saying what you are about to do and why, so the person can follow the work. Then call tools, verify, and answer as yourself.',
   ]);
 }

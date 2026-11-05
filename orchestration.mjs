@@ -17,6 +17,8 @@ export function ensureOrchestrationSchema(db) {
     CREATE UNIQUE INDEX IF NOT EXISTS vault_user_origin_label ON vault_logins(user_id,origin,label);
     CREATE TABLE IF NOT EXISTS proactive_events(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,event_key TEXT NOT NULL,kind TEXT NOT NULL,summary TEXT NOT NULL,status TEXT NOT NULL,created_at INTEGER NOT NULL,delivered_at INTEGER,responded_at INTEGER,UNIQUE(user_id,event_key));
     CREATE TABLE IF NOT EXISTS task_recovery(job_id TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS task_questions(id TEXT PRIMARY KEY,job_id TEXT NOT NULL,user_id TEXT NOT NULL,prompt TEXT NOT NULL,kind TEXT NOT NULL DEFAULT 'text',options TEXT,status TEXT NOT NULL DEFAULT 'pending',answer TEXT,expires_at INTEGER NOT NULL,created_at INTEGER NOT NULL,answered_at INTEGER);
+    CREATE INDEX IF NOT EXISTS task_questions_user ON task_questions(user_id,status,created_at);
   `);
 }
 
@@ -30,6 +32,53 @@ export function recordStep(db, jobId, userId, ordinal, kind, summary, status, ou
     VALUES(?,?,?,?,?,?,?,1,?,?,?) ON CONFLICT(job_id,ordinal) DO UPDATE SET status=excluded.status,attempts=task_steps.attempts+CASE WHEN excluded.status='running' THEN 1 ELSE 0 END,output=excluded.output,updated_at=excluded.updated_at`)
     .run(uuid(),jobId,userId,ordinal,String(kind).slice(0,60),String(summary).slice(0,300),status,output===null?null:JSON.stringify(output).slice(0,12000),stamp,stamp);
   logTaskEvent(db,jobId,userId,`step_${status}`,`${ordinal}: ${summary}`);
+}
+
+// The agent can pause and ask the person something in Telegram: a phone number, an OTP, a choice,
+// or permission to sign in. The worker polls until the answer arrives, expires, or is canceled.
+export function createQuestion(db, userId, jobId, { prompt, kind = 'text', options = null, timeoutMs = 10 * 60_000 } = {}) {
+  const job = db.prepare("SELECT status FROM jobs WHERE id=? AND user_id=? AND status IN ('running','queued')").get(jobId, userId);
+  if (!job) throw Error('Task is no longer active');
+  const text = String(prompt || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+  if (!text) throw Error('A question needs a prompt');
+  db.prepare("UPDATE task_questions SET status='expired' WHERE user_id=? AND status='pending' AND expires_at<=?").run(userId, now());
+  db.prepare("UPDATE task_questions SET status='superseded' WHERE user_id=? AND status='pending'").run(userId);
+  const question = { id: uuid(), job_id: jobId, user_id: userId, prompt: text, kind: String(kind || 'text').slice(0, 40), options: options ? JSON.stringify(Array.isArray(options) ? options.slice(0, 10).map(item => String(item).slice(0, 120)) : null).slice(0, 2000) : null, status: 'pending', expires_at: now() + Math.max(60_000, Math.min(30 * 60_000, Number(timeoutMs) || 10 * 60_000)), created_at: now() };
+  db.prepare('INSERT INTO task_questions(id,job_id,user_id,prompt,kind,options,status,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)').run(question.id, question.job_id, userId, question.prompt, question.kind, question.options, question.status, question.expires_at, question.created_at);
+  logTaskEvent(db, jobId, userId, 'question_asked', question.prompt);
+  return question;
+}
+
+export function pendingQuestion(db, userId) {
+  return db.prepare("SELECT * FROM task_questions WHERE user_id=? AND status='pending' ORDER BY created_at DESC LIMIT 1").get(userId) || null;
+}
+
+export function answerQuestion(db, userId, text) {
+  const row = pendingQuestion(db, userId);
+  if (!row) return null;
+  const answer = String(text || '').trim().slice(0, 4000);
+  if (!answer) return null;
+  db.prepare("UPDATE task_questions SET status='answered',answer=?,answered_at=? WHERE id=?").run(answer, now(), row.id);
+  logTaskEvent(db, row.job_id, userId, 'question_answered', answer.slice(0, 300));
+  return { ...row, answer, status: 'answered' };
+}
+
+export function questionState(db, userId, id) {
+  const row = db.prepare('SELECT * FROM task_questions WHERE id=? AND user_id=?').get(id, userId);
+  if (!row) throw Error('Question not found');
+  if (row.status === 'pending' && row.expires_at <= now()) {
+    db.prepare("UPDATE task_questions SET status='expired' WHERE id=?").run(id);
+    return { ...row, status: 'expired' };
+  }
+  return row;
+}
+
+export function threadQuestions(db, userId, jobIds) {
+  const ids = (jobIds || []).filter(Boolean);
+  if (!ids.length) return [];
+  const marks = ids.map(() => '?').join(',');
+  return db.prepare(`SELECT id,job_id,prompt,kind,options,status,answer,expires_at,created_at,answered_at FROM task_questions WHERE user_id=? AND job_id IN (${marks}) ORDER BY created_at`).all(userId, ...ids)
+    .map(row => ({ ...row, options: row.options ? (() => { try { return JSON.parse(row.options); } catch { return null; } })() : null }));
 }
 
 export function taskReceipt(db, jobId, userId) {

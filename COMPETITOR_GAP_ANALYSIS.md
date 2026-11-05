@@ -41,3 +41,44 @@ Talisman has Telegram account pairing and messaging; one assigned Webtop compute
 4. **Richer interaction:** voice/photo input, calling, project contexts and group collaboration. Add artifact creation and personalized quick actions once the underlying tasks work reliably.
 
 The first demonstration should be: “Check my two inboxes and calendars for tomorrow, tell me if my trip conflicts with class, find two alternatives, and prepare the change.” It exercises retrieval, synthesis, browser research, memory, approval and a truthful receipt without requiring an unauthorized purchase.
+
+
+
+Talisman:
+Checked all three pages directly today (5 Nov 2026), plus Hark's pricing. Here's what actually matters for Talisman's page.
+
+The one-line read
+All three sell the same product — "text an assistant, it uses a computer to do the task" — and none of them talk about models. They differ almost entirely in how much proof they show and how they handle the trust objection. That's the opening for Talisman.
+
+Side-by-side
+
+| | Hark (hark.com) | Instinct (instinct.com) | Tab (tab.bot) |
+|---|---|---|---|
+| Hero | "A new kind of system for getting things done. Whatever you need, let Hark handle it." | "A personal assistant that understands what you're working on and what's important to you." | "Your personal assistant you text when you need something done." |
+| Category word | "system" (not assistant) | "personal assistant" | "assistant" |
+| CTA | Instant signup (Google/Apple) | Try / Log in / Invite | Phone-number waitlist |
+| Proof on page | Inline demo prompt, 5 feature blocks, security pillar | Nothing — one paragraph + 5 inline links | 8 real thread transcripts with prices and approval |
+| Pricing | Free, $20 (2×), $100 (10×) | None | None (private beta) |
+| Trust handling | Whole section: E2E encryption, "vault", approval before acting | Absent | Approval baked into every demo |
+| Weakness | Jargon (Handoff, Panels, Pro²/Pro³), no social proof | Too sparse to convince a skeptic | Waitlist, no pricing, US-first |
+
+Patterns worth stealing
+• Concrete task > value prop. Hark's above-the-fold is a typed prompt ("Book me a trip to Mexico City… cheapest flights and a nice hotel in Polanco"), not an adjective. Tab goes further: real transcripts with channel tags, item, size, price, and the confirmation step.
+• Approval-before-spending is the trust motif. Hark says it once; Tab demonstrates it in every example ("books them only after the user confirms"). Instinct, tellingly, says nothing about it.
+• Security is a pillar, not a footer. Hark gives it a named section ("Secured by hark") because the product wants your logins and cards.
+• Plain verbs beat invented nouns. Tab's "restaurants / phone calls / flights / shopping" is instantly legible; Hark makes you learn "Handoff" and "Panels."
+• Nobody shows social proof. No testimonials, logos, press, or usage counts on any of the three. Cheap differentiation.
+
+The gaps Talisman can own
+1. Proactivity. All three are reactive — "when you need something done." Hark claims persistent memory, Tab doesn't, Instinct only gestures at it. If Talisman acts before being asked, that's an unclaimed position. Say it in the hero.
+2. Trust as a feature. Make "it asks before it spends, sends, or books" a visible section with receipts, not small print.
+3. Proof. Three real transcripts with prices + three user quotes would out-prove all three competitors.
+4. Transparent pricing. Only Hark publishes any; two of three hide behind waitlists. A free tier with clear usage limits is a conversion edge.
+5. India localization (if that's the market). Tab defaults to US +1; all three are US-centric. WhatsApp/UPI/Swiggy/IRCTC and ₹ pricing are uncontested.
+
+Suggested page order
+
+Talisman:
+Hero with one outcome line + a live-looking thread → 3 proof-of-work demos with prices and the approval moment → "works while you don't" (proactivity/memory) → trust section (approval gate, encryption, limits) → transparent pricing → social proof → lowest-friction CTA (text/WhatsApp number, not an account wall).
+
+Want me to draft the actual hero copy and section-by-section wireframe for Talisman next?

@@ -4,6 +4,7 @@ COPY server.mjs telegram.mjs provisioner.mjs worker.mjs document-tools.mjs opena
 COPY arlong.mjs ./
 COPY assistant-actions.mjs ./
 COPY orchestration.mjs ./
+COPY task-inbox.mjs ./
 COPY accounts.mjs ./
 COPY public ./public
 COPY prompts ./prompts
