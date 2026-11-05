@@ -183,4 +183,17 @@ test('Telegram-only chat, single-account pairing, legacy linking, and connected 
  assert.equal(lastOpenCodeMessage.parts[0].text,'Jailer 2 and one ticket');
  assert.match(lastOpenCodeMessage.system,/Check movie tickets in Chennai on November 9/);
  assert.match(lastOpenCodeMessage.system,/decide which available tools are needed/);
+ while(db.prepare('SELECT COUNT(*) AS count FROM telegram_accounts').get().count<10){
+   const id=crypto.randomUUID(),number=db.prepare('SELECT COUNT(*) AS count FROM telegram_accounts').get().count;
+   db.prepare('INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)').run(id,`beta-${number}@example.test`,'disabled',Date.now());
+   db.prepare('INSERT INTO telegram_accounts(telegram_id,user_id,chat_id,username,created_at) VALUES(?,?,?,?,?)').run(`beta-${number}`,id,`beta-${number}`,null,Date.now());
+ }
+ await handleTelegramMessage(db,{chat:{id:999,type:'private'},from:{id:999,username:'waiting'},text:'/start'},deps);
+ assert.match(sent.at(-1).text,/full for this first group of 10/i);
+ assert.equal(db.prepare("SELECT 1 FROM telegram_accounts WHERE telegram_id='999'").get(),undefined);
+ assert.equal(db.prepare("SELECT 1 FROM dashboard_pairs WHERE user_id=(SELECT user_id FROM telegram_accounts WHERE telegram_id='999')").get(),undefined);
+ await handleTelegramMessage(db,{chat:{id:999,type:'private'},from:{id:999,username:'waiting'},text:'waiter@example.test'},deps);
+ assert.equal(db.prepare("SELECT email FROM beta_waitlist WHERE telegram_id='999'").get().email,'waiter@example.test');
+ await handleTelegramMessage(db,{chat:{id:111,type:'private'},from:{id:111,username:'one'},text:'/start'},deps);
+ assert.match(sent.at(-1).text,/dashboard code/i);
 });

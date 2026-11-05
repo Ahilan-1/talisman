@@ -1,5 +1,6 @@
 import { renderInbox } from './inbox.js';
 import { renderCalendar as renderCalendarPage } from './calendar.js';
+import { mountLanding } from './landing.js';
 const app = document.querySelector('#app');
 const state = { me: null, profile: null, config: null, computers: [], openai: null, preference: 'automatic', preferenceError: null, tiers: null, tierError: null, oauthError: null, view: 'workspace', selectedTaskId: null };
 
@@ -41,22 +42,19 @@ async function refresh() {
 
 function renderWelcome() {
   const url = botUrl();
-  app.innerHTML = `<main class="welcome">
-    <div class="welcome-mark" aria-hidden="true">✳ <span>Talisman.</span></div>
-    <div class="welcome-copy">
-      <div class="eyebrow">ONE PERSON · ONE AGENT · ONE COMPUTER</div>
-      <h1>Just message.<br><em>It gets done.</em></h1>
-      <p>Talisman lives in Telegram and works from a computer of its own. Ask for help with the details, then carry on with your day.</p>
-      <p>Send <code>/start</code> to connect your dashboard with a unique code.</p>
-      <div class="welcome-actions">
-        ${url ? `<a class="solid-button" href="${url}" target="_blank" rel="noopener">Start in Telegram <span>↗</span></a>` : '<span class="quiet">Telegram bot is not connected yet.</span>'}
-        <button class="text-action" id="show-pair">I have a pairing code <span>→</span></button>
-        <button class="text-action" id="show-login">Already linked? Sign in <span>→</span></button>
-      </div>
-    </div>
+  app.innerHTML = `<main class="landing" id="top">
+    <div class="landing-atmosphere" aria-hidden="true"><canvas id="landing-canvas"></canvas></div>
+    <header class="landing-nav"><a class="landing-brand" href="/" aria-label="Talisman home">TALISMAN</a><nav><a href="#capabilities">Capabilities</a><a href="#how-it-works">How it works</a><button id="show-login">Sign in</button></nav></header>
+    <section class="landing-hero"><div class="landing-kicker">YOUR PERSONAL AGENT · NOW IN TELEGRAM</div><h1>Give your day<br><em>back to yourself.</em></h1><p>Ask Talisman to research, plan, browse and follow through. It works from its own computer, remembers the details and brings decisions back to you.</p><div class="landing-actions">${url ? `<a class="landing-primary" href="${url}" target="_blank" rel="noopener">Meet Talisman on Telegram <span>↗</span></a>` : '<span>Telegram access is being prepared.</span>'}<button class="landing-secondary" id="show-pair">I have a pairing code <span>↗</span></button></div><div class="landing-hero-foot"><span>One conversation. A world of work.</span><a href="#capabilities">Explore <span>↓</span></a></div></section>
+    <section class="landing-intro" id="capabilities"><div class="landing-overline">A MORE CAPABLE KIND OF HELP</div><h2>From a thought<br>to <em>something done.</em></h2><p>Talisman can use a dedicated computer to work across websites and tools, then return with a clear answer, an action log and the next decision that matters.</p></section>
+    <section class="landing-capabilities" aria-label="Talisman capabilities"><article><span>01 / EXPLORE</span><h3>Find the answer, then check it.</h3><p>Search the web, compare options and open the source. Talisman can use its browser when a task needs more than a search result.</p></article><article><span>02 / ORGANISE</span><h3>Keep the loose ends together.</h3><p>Turn a message into a task, a reminder or a recurring check. Your inbox keeps the request, progress and result in one place.</p></article><article><span>03 / WORK</span><h3>A computer of its own.</h3><p>Each account has a private computer for browser work. You can watch what it is doing from your workspace while you stay in control.</p></article><article><span>04 / REMEMBER</span><h3>Context that carries forward.</h3><p>Talisman keeps the preferences and details you choose to share, so the next conversation can start where the last one ended.</p></article></section>
+    <section class="landing-quote" id="how-it-works"><div class="landing-overline">HOW IT WORKS</div><blockquote>“Could you take care of this?”</blockquote><p>Just send a message. Talisman plans the work, uses the right tools, and asks before a consequential action. You get a concise result and can open the full task record whenever you want.</p><div class="landing-steps"><span>01 &nbsp; Message in Telegram</span><span>02 &nbsp; Talisman works</span><span>03 &nbsp; You decide what happens next</span></div></section>
+    <section class="landing-future"><div><span class="landing-overline">THE NEXT CHAPTER</span><h2>It starts in Telegram.<br><em>It won't stop there.</em></h2></div><p>Telegram is available first. Discord and WhatsApp are planned next. The ambition is revolutionary: an agent that can move from conversation to real work, while keeping you informed and in charge.</p></section>
+    <footer class="landing-footer"><span>TALISMAN</span><span>Personal agency, thoughtfully built.</span><a href="#top">Back to top ↑</a></footer>
   </main>`;
   document.querySelector('#show-pair').onclick = renderPair;
   document.querySelector('#show-login').onclick = renderLogin;
+  mountLanding(app.querySelector('.landing'));
 }
 
 function renderLogin(){
@@ -189,7 +187,7 @@ function renderModels() {
   frame('Integrations', `<header class="page-header"><h1>Integrations</h1><p>Choose how Talisman thinks. Your conversation stays in Telegram.</p></header>
     ${section('OpenAI account', 'Local sign-in for eligible ChatGPT plans.', `<div class="model-connection"><div class="row-copy"><strong>${state.openai?.connected ? 'Connected' : 'Not connected'}</strong><span>${escapeHtml(state.openai?.email || 'Continue with ChatGPT to authorize this account.')}</span></div>${state.openai?.connected ? '<button class="outline-button" id="disconnect-openai">Disconnect</button>' : '<a class="solid-button" id="connect-openai" data-oai-siwc-button href="/api/openai/start">Continue with ChatGPT ↗</a>'}</div>${error ? `<p class="warning">${escapeHtml(error)}</p>` : ''}`)}
     ${section('Choose how Talisman replies', 'This choice belongs to your account and applies to Telegram.', `<div class="model-options">
-      <button class="model-option ${state.preference === 'automatic' ? 'selected' : ''}" data-mode="automatic"><strong>Automatic</strong><span>OpenAI for quick replies; free models for computer tasks.</span></button>
+      <button class="model-option ${state.preference === 'automatic' ? 'selected' : ''}" data-mode="automatic"><strong>Automatic</strong><span>Uses your connected OpenAI account when available; otherwise uses free models.</span></button>
       <button class="model-option ${state.preference === 'free' ? 'selected' : ''}" data-mode="free"><strong>Free models</strong><span>Use only zero-cost models in your private OpenCode computer. Provider limits still apply.</span></button>
       <button class="model-option ${state.preference === 'openai' ? 'selected' : ''}" data-mode="openai" ${state.openai?.connected ? '' : 'disabled'}><strong>OpenAI</strong><span>Use your connected account for replies and tasks in your assigned computer.</span></button>
     </div>${state.preferenceError ? `<p class="warning">${escapeHtml(state.preferenceError)}</p>` : ''}`)}

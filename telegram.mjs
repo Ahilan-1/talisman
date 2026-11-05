@@ -14,6 +14,7 @@ export function ensureTelegramAccount(db, message, { hash, random, now, dataDir 
   if (message.chat?.type !== 'private' || !message.from?.id) return null;
   const telegramId = String(message.from.id);
   const chatId = String(message.chat.id);
+  db.exec('CREATE TABLE IF NOT EXISTS beta_waitlist(telegram_id TEXT PRIMARY KEY,chat_id TEXT NOT NULL,username TEXT,email TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)');
   let account = db.prepare('SELECT * FROM telegram_accounts WHERE telegram_id=?').get(telegramId);
   if (account) {
     db.prepare('UPDATE telegram_accounts SET chat_id=?,username=? WHERE telegram_id=?').run(chatId, message.from.username || null, telegramId);
@@ -26,6 +27,11 @@ export function ensureTelegramAccount(db, message, { hash, random, now, dataDir 
   const timestamp = now();
   db.exec('BEGIN IMMEDIATE');
   try {
+    const betaLimit = Math.max(1, Number(process.env.TALISMAN_BETA_USERS || 10) || 10);
+    if (db.prepare('SELECT COUNT(*) AS count FROM telegram_accounts').get().count >= betaLimit) {
+      db.exec('ROLLBACK');
+      return { waitlisted: true };
+    }
     db.prepare('INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)').run(userId, `telegram-${telegramId}@talisman.invalid`, `${salt}:${disabledPassword}`, timestamp);
     db.prepare('INSERT INTO telegram_accounts(telegram_id,user_id,chat_id,username,created_at) VALUES(?,?,?,?,?)').run(telegramId, userId, chatId, message.from.username || null, timestamp);
     db.prepare('INSERT INTO computers(id,user_id,name,created_at) VALUES(?,?,?,?)').run(computerId, userId, 'My cloud computer', timestamp);
@@ -38,6 +44,7 @@ export function ensureTelegramAccount(db, message, { hash, random, now, dataDir 
     throw error;
   }
   try { syncUserFiles(db, dataDir, userId); } catch (error) { console.error('Profile file sync failed:', error.message); }
+  db.prepare('DELETE FROM beta_waitlist WHERE telegram_id=?').run(telegramId);
   return { userId, computer: db.prepare('SELECT * FROM computers WHERE id=?').get(computerId), created: true };
 }
 
@@ -80,8 +87,29 @@ export async function deliverTelegramResults(db, send) {
 }
 
 export async function handleTelegramMessage(db, message, dependencies) {
+  if (message.chat?.type !== 'private' || !message.from?.id) return;
+  const isNew=!db.prepare('SELECT 1 FROM telegram_accounts WHERE telegram_id=?').get(String(message.from.id));
+  const incoming=String(message.text||'').trim();
+  if (isNew && !/^\/start(?:@\w+)?(?:\s|$)/i.test(incoming)) {
+    const hasWaitlist=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='beta_waitlist'").get();
+    const alreadyWaiting=hasWaitlist&&db.prepare('SELECT 1 FROM beta_waitlist WHERE telegram_id=?').get(String(message.from.id));
+    const limit=Math.max(1,Number(process.env.TALISMAN_BETA_USERS||10)||10);
+    const full=db.prepare('SELECT COUNT(*) AS count FROM telegram_accounts').get().count>=limit;
+    if (!alreadyWaiting||!full) return dependencies.send(String(message.chat.id),'Send /start to set up your Talisman account.');
+  }
   const account = ensureTelegramAccount(db, message, dependencies);
   if (!account) return;
+  if (account.waitlisted) {
+    const telegramId=String(message.from.id),chatId=String(message.chat.id),text=String(message.text||'').trim();
+    const timestamp=dependencies.now();
+    db.prepare('INSERT INTO beta_waitlist(telegram_id,chat_id,username,email,created_at,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(telegram_id) DO UPDATE SET chat_id=excluded.chat_id,username=excluded.username,updated_at=excluded.updated_at').run(telegramId,chatId,message.from.username||null,null,timestamp,timestamp);
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) && text.length<=254) {
+      db.prepare('UPDATE beta_waitlist SET email=?,updated_at=? WHERE telegram_id=?').run(text.toLowerCase(),timestamp,telegramId);
+      return dependencies.send(chatId,"You're on the waitlist. We're full for this first group of 10, but I'll text you here when we're ready for more people.");
+    }
+    const hasEmail=!!db.prepare('SELECT email FROM beta_waitlist WHERE telegram_id=?').get(telegramId)?.email;
+    return dependencies.send(chatId,hasEmail ? "We're full for this first group of 10. You're on the waitlist, and I'll text you here when we're ready." : "We're full for this first group of 10. I'll text you here when we're ready for more people. Send me your email address if you'd like me to add it to the waitlist too.");
+  }
   const { userId, computer } = account;
   const chatId = String(message.chat.id);
   const text = String(message.text || '').trim();

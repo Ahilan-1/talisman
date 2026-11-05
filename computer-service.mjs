@@ -33,8 +33,8 @@ async function browser() {
   if (!context) {
     await clearStaleProfileLock();
     context = await chromium.launchPersistentContext(profile, {
-      executablePath: '/usr/bin/chromium', headless: false, viewport: { width: 1365, height: 900 },
-      args: ['--no-sandbox', '--disable-dev-shm-usage'], timeout: 30_000,
+      executablePath: '/usr/bin/chromium', headless: false, viewport: null,
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-notifications'], timeout: 30_000,
     });
     page = context.pages()[0] || await context.newPage();
     page.setDefaultTimeout(25_000);
@@ -173,7 +173,7 @@ async function resolveTarget(tab, raw) {
 // actionability again; never force a coordinate click through a consent layer.
 async function clickTarget(tab, target) {
   const attempt = async timeout => {
-    await target.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+    await target.scrollIntoViewIfNeeded({ timeout: 3000 });
     await target.click({ timeout });
   };
   try { await attempt(4000); return []; }
@@ -182,7 +182,10 @@ async function clickTarget(tab, target) {
     const closed = await dismissOverlays(tab);
     if (closed.length) recovered.push(`closed ${closed.join(', ')}`);
     try { await attempt(4000); return recovered.length ? recovered : ['clicked after the page settled']; }
-    catch (second) { throw Error(`Click did not reach the control: ${String(second.message || second).split('\n')[0]}. Inspect the current page and choose a visible control or another route.`); }
+    catch (second) {
+      const position=await target.evaluate(element=>{const r=element.getBoundingClientRect();return {top:Math.round(r.top),bottom:Math.round(r.bottom),viewportHeight:innerHeight}}).catch(()=>null);
+      throw Error(`Click did not reach the control: ${String(second.message || second).split('\n')[0]}. First attempt: ${String(first.message || first).split('\n')[0]}. ${position?`Target position ${JSON.stringify(position)}. `:''}Inspect again; if the fare panel scrolls separately, scroll inside it or choose its visible booking button.`);
+    }
   }
 }
 

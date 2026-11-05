@@ -23,10 +23,12 @@ The error output includes the current tabs, visible controls, overlay hints, and
 1. If the page is dimmed, a consent banner or dialog may cover it. Run `dismiss`, then `inspect`. Prefer a visible **Reject** or **Close** choice when available. An `inspect` call itself never blocks the browser.
 2. If the ref vanished, inspect again and use the new ref. Refs change after navigation or a dynamic rerender.
 3. If the control is off screen, scroll, inspect, then click the observed control.
+   A fare comparison panel may have its own scrollbar. The fare title is often a label, while its **Continue**, **Select**, or **Book** button is below the visible fold. Scroll that panel and inspect again before choosing a fresh ref. Do not treat a click on the fare name as progression to the seat map.
 4. If the target changed, use another visible path, such as its label, a search form, or a different provider. Do not invent a destination URL or guess a CSS class.
 5. Take a screenshot for canvas controls, complex widgets, or when the visible page conflicts with the text map. Judge the screenshot before the next action.
 
 The computer automatically attempts to close common popups on a blocked click. If it still reports failure, the click did not complete. Never report that the date was selected or the search submitted until the page confirms it.
+Browser notification permission prompts are browser chrome, not page elements. The assigned browser disables those prompts; if an existing prompt remains, close it before interacting with the website.
 
 ## Date pickers
 
