@@ -167,7 +167,7 @@ export function createOpenAIConnection(db, dataDir) {
       tool('inspect', 'Read the current page’s links, buttons and inputs.', {}),
       tool('wait', 'Wait for a selector or text to appear, or for the network to settle.', { selector: text('CSS selector, or empty'), text: text('Visible text to wait for, or empty'), timeoutMs: text('Maximum wait in milliseconds, for example 8000') }),
       tool('scroll', 'Scroll the page to reveal lazy content.', { direction: text('down, up, left or right'), amount: text('Pixels, for example 800') }),
-      tool('click', 'Click a selector. Do not confirm a purchase, booking, or account creation without approval.', { selector: text('CSS selector') }),
+      tool('click', 'Click a selector. Set intent to consequential for any submission, booking, purchase, account creation, outbound message, or other material change; Talisman will ask the user for approval.', { selector: text('CSS selector'), intent: text('navigation or consequential') }),
       tool('fill', 'Fill a form field.', { selector: text('CSS selector'), value: text('Text to enter') }),
       tool('select', 'Choose an option in a dropdown.', { selector: text('CSS selector'), value: text('Option value or label') }),
       tool('hover', 'Hover an element to open menus or tooltips.', { selector: text('CSS selector') }),
@@ -184,6 +184,8 @@ export function createOpenAIConnection(db, dataDir) {
       tool('create_watch', 'Check a public page periodically and alert when its selected content changes.', { url: text('Public page URL'), selector: text('CSS selector or empty string'), intervalMinutes: text('Check interval, 5 to 1440 minutes') }),
       tool('list_commitments', 'List upcoming reminders, future tasks and website watches.', {}),
       tool('cancel_commitment', 'Cancel a reminder, future task or website watch by its ID.', { id: text('Eight-character commitment ID') }),
+      tool('create_calendar_event', 'Put a confirmed plan on the Talisman calendar. Do not add a speculative booking as confirmed.', { title: text('Event title'), description: text('Relevant details or empty'), start: text('ISO 8601 start with timezone offset'), end: text('ISO 8601 end with timezone offset') }),
+      tool('list_calendar_events', 'Read the account calendar before scheduling work or checking conflicts.', { from: text('ISO 8601 range start'), to: text('ISO 8601 range end, at most 93 days later') }),
     ] });
     const response = await fetch(`${RESOURCE}/responses`, { method: 'POST', headers: { authorization: `Bearer ${await access(userId)}`, 'content-type': 'application/json' }, body: JSON.stringify({ model, instructions, input, tools, store: false, stream: true }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000) });
     if (!response.ok) {

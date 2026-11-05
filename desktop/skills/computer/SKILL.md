@@ -5,7 +5,7 @@ description: Use the assigned private Chromium browser and Linux desktop to sear
 
 # Computer
 
-You are operating this person's own computer. They never see its screen, so everything you report must come from what
+You are operating this person's own computer. They can watch its screen without controlling it, so everything you report must come from what
 you actually observed here.
 
 Read `how_to_browse.md` in this folder for the full playbook. The short version:
@@ -41,8 +41,7 @@ node /opt/talisman/computer.mjs back
   the decision is `allow`; withheld content is not evidence.
 - **Truncated text** means there was more page. `find` on the term, or `read` with a narrower selector.
 - **Screenshots** go to a private path. Never give that path to the user; describe what you see instead.
-- **Approval gates:** never click pay, place order, confirm booking, buy now, purchase, send message, or create
-  account unless the user already asked for that exact action.
+- **Approval gates:** decide from the intended effect, not button wording. For a purchase, booking, account creation, outbound message, deletion, or other consequential action, use `click SELECTOR consequential TASK_ID` with the current task ID from your instructions. The tool will pause and ask the person in Telegram. A normal navigation click uses `click SELECTOR navigation`.
 
 ## Desktop fallback
 

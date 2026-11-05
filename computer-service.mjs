@@ -218,7 +218,14 @@ async function action(data) {
   else if (kind === 'click') {
     const target = tab.locator(String(data.selector || '')).first();
     const label = ((await target.innerText().catch(() => '')) + ' ' + (await target.getAttribute('aria-label').catch(() => '') || '')).trim();
-    if (/\b(pay|place order|confirm booking|buy now|purchase|send message|create account)\b/i.test(label)) throw Error('This action needs explicit user approval before it can be clicked');
+    if (data.intent==='consequential') {
+      const context=await target.evaluate(element=>(element.closest('form')||element.parentElement)?.innerText?.slice(0,700)||'').catch(()=>'');
+      const details={label:label.slice(0,160),url:tab.url(),selector:String(data.selector||'').slice(0,300),title:await tab.title(),context};
+      if(!data.approvalId)return {approvalRequired:details};
+      const base=(process.env.TALISMAN_URL||'http://talisman:3000').replace(/\/$/,'');
+      const response=await fetch(`${base}/api/worker/task/approval/consume`,{method:'POST',headers:{authorization:`Bearer ${process.env.TALISMAN_WORKER_KEY||''}`,'content-type':'application/json'},body:JSON.stringify({id:data.approvalId,...details}),signal:AbortSignal.timeout(10000)});
+      if(!response.ok)throw Error('That exact action was not approved');
+    }
     await target.click();
   }
   else if (kind === 'fill') await tab.locator(String(data.selector || '')).first().fill(String(data.value || '').slice(0, 5000));
@@ -238,6 +245,11 @@ async function action(data) {
 }
 
 http.createServer(async (req, res) => {
+  if(req.method==='GET'&&req.url==='/view'){
+    if(!process.env.TALISMAN_VIEW_TOKEN||req.headers['x-talisman-view-token']!==process.env.TALISMAN_VIEW_TOKEN){res.writeHead(403);return res.end()}
+    const shot=path.join(shots,'viewer.png');
+    try{await run('python3',['-c','from PIL import ImageGrab; import sys; ImageGrab.grab(xdisplay=":1").save(sys.argv[1])',shot],{timeout:5000,env:{...process.env,DISPLAY:':1'}});const png=fs.readFileSync(shot);res.writeHead(200,{'content-type':'image/png','cache-control':'no-store','content-length':png.length});return res.end(png)}catch{res.writeHead(503);return res.end()}
+  }
   res.setHeader('content-type', 'application/json; charset=utf-8');
   if (req.method !== 'POST' || req.url !== '/action') { res.statusCode = 404; return res.end('{}'); }
   if (busy) {

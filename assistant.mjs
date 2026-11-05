@@ -5,6 +5,8 @@ const commands = {
   watch: () => ({ action: 'create_watch', args: { url: values[0], intervalMinutes: values[1], selector: values.slice(2).join(' ') } }),
   list: () => ({ action: 'list_commitments', args: {} }),
   cancel: () => ({ action: 'cancel_commitment', args: { id: values[0] } }),
+  calendar: () => ({ action: 'list_calendar_events', args: { from: values[0], to: values[1] } }),
+  event: () => ({ action: 'create_calendar_event', args: { start: values[0], end: values[1], title: values.slice(2).join(' ') } }),
 };
 if (!commands[command]) throw Error('Use remind, followup, watch, list, or cancel');
 const control = (process.env.TALISMAN_URL || 'http://talisman:3000').replace(/\/$/, '');

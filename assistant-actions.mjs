@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { publicWebUrl } from './arlong.mjs';
 import { formatWhen } from './schedule.mjs';
 import { proactiveSettings } from './proactive.mjs';
+import { createCalendarEvent, calendarEvents } from './orchestration.mjs';
 
 const DAY = 86_400_000;
 const id = () => crypto.randomBytes(4).toString('hex').toUpperCase();
@@ -25,6 +26,14 @@ export function runAssistantAction(db, userId, action, args = {}, now = Date.now
     const at = futureTime(args.at, now), key = id();
     db.prepare('INSERT INTO reminders(id,user_id,chat_id,text,due_at) VALUES(?,?,?,?,?)').run(key, userId, account.chat_id, text, at);
     return { id: key, kind: 'reminder', text, at: formatWhen(at, zone) };
+  }
+  if (action === 'create_calendar_event') {
+    return createCalendarEvent(db,userId,{title:args.title,description:args.description,start:args.start,end:args.end,source:'agent'});
+  }
+  if (action === 'list_calendar_events') {
+    const from=Date.parse(args.from),to=Date.parse(args.to);
+    if(!Number.isFinite(from)||!Number.isFinite(to)||to<=from||to-from>93*DAY)throw Error('Choose a calendar range of up to 93 days');
+    return {events:calendarEvents(db,userId,from,to)};
   }
   if (action === 'create_followup') {
     const instruction = clean(args.instruction);

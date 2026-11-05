@@ -1,5 +1,5 @@
 const app = document.querySelector('#app');
-const state = { me: null, config: null, computers: [], openai: null, preference: 'automatic', preferenceError: null, tiers: null, tierError: null, oauthError: null, view: 'workspace' };
+const state = { me: null, profile: null, config: null, computers: [], openai: null, preference: 'automatic', preferenceError: null, tiers: null, tierError: null, oauthError: null, view: 'workspace' };
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 
@@ -22,6 +22,7 @@ async function refresh() {
   state.config = await api('/config');
   try {
     state.me = await api('/me');
+    state.profile = await api('/account/profile');
     state.computers = await api('/computers');
     state.openai = await api('/openai/status');
     state.preference = (await api('/models/preference')).mode;
@@ -29,6 +30,7 @@ async function refresh() {
     const oauthReturn = new URLSearchParams(location.search);
     if (oauthReturn.has('openai')) { state.view = 'models'; state.oauthError = oauthReturn.get('openai') === 'error' ? oauthReturn.get('detail') || 'Sign-in failed' : null; history.replaceState(null, '', '/'); }
     render();
+    if(!state.profile.complete)showCredentialSetup();
   } catch {
     state.me = null;
     renderWelcome();
@@ -47,10 +49,24 @@ function renderWelcome() {
       <div class="welcome-actions">
         ${url ? `<a class="solid-button" href="${url}" target="_blank" rel="noopener">Start in Telegram <span>↗</span></a>` : '<span class="quiet">Telegram bot is not connected yet.</span>'}
         <button class="text-action" id="show-pair">I have a pairing code <span>→</span></button>
+        <button class="text-action" id="show-login">Already linked? Sign in <span>→</span></button>
       </div>
     </div>
   </main>`;
   document.querySelector('#show-pair').onclick = renderPair;
+  document.querySelector('#show-login').onclick = renderLogin;
+}
+
+function renderLogin(){
+  app.innerHTML=`<main class="pair-page"><div class="pair-panel"><button class="back-link" id="back">← Back</button><div class="wordmark">Talisman</div><h1>Welcome back.</h1><p>Sign in to the account you created after connecting Telegram.</p><form id="login-form" class="stack-form"><label>Username or email<input name="identity" autocomplete="username" required></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><p id="login-error" role="status"></p><button class="solid-button">Sign in →</button></form></div></main>`;
+  document.querySelector('#back').onclick=renderWelcome;
+  document.querySelector('#login-form').onsubmit=async event=>{event.preventDefault();try{await api('/login',{method:'POST',body:JSON.stringify({identity:event.target.elements.identity.value,password:event.target.elements.password.value})});await refresh()}catch(error){document.querySelector('#login-error').textContent=error.message}};
+}
+
+function showCredentialSetup(){
+  if(document.querySelector('#account-setup'))return;
+  const modal=document.createElement('div');modal.id='account-setup';modal.className='modal-backdrop';modal.innerHTML=`<div class="setup-panel" role="dialog" aria-modal="true" aria-labelledby="setup-title"><div class="wordmark">Talisman</div><h2 id="setup-title">Finish your account</h2><p>Telegram is connected. Create website sign-in details for this account.</p><form id="setup-form" class="stack-form"><label>Username<input name="username" autocomplete="username" minlength="3" maxlength="32" required></label><label>Email<input name="email" type="email" autocomplete="email" required></label><label>Password<input name="password" type="password" autocomplete="new-password" minlength="12" required></label><p id="setup-error" role="status"></p><button class="solid-button">Create account</button></form></div>`;app.append(modal);
+  modal.querySelector('#setup-form').onsubmit=async event=>{event.preventDefault();try{const form=event.target;await api('/account/setup',{method:'POST',body:JSON.stringify({username:form.elements.username.value,email:form.elements.email.value,password:form.elements.password.value})});state.profile=await api('/account/profile');modal.remove()}catch(error){modal.querySelector('#setup-error').textContent=error.message}};
 }
 
 function renderPair() {
@@ -76,6 +92,9 @@ function frame(title, content) {
     <nav aria-label="Main navigation">
       <button data-view="workspace" class="nav-link ${state.view === 'workspace' ? 'current' : ''}">Workspace</button>
       <button data-view="computers" class="nav-link ${state.view === 'computers' ? 'current' : ''}">Agent workspace</button>
+      <button data-view="calendar" class="nav-link ${state.view === 'calendar' ? 'current' : ''}">Calendar</button>
+      <button data-view="tasks" class="nav-link ${state.view === 'tasks' ? 'current' : ''}">Activity</button>
+      <button data-view="vault" class="nav-link ${state.view === 'vault' ? 'current' : ''}">Vault</button>
       <button data-view="models" class="nav-link ${state.view === 'models' ? 'current' : ''}">Models</button>
       <button data-view="preferences" class="nav-link ${state.view === 'preferences' ? 'current' : ''}">Preferences</button>
     </nav>
@@ -115,7 +134,31 @@ function renderComputers() {
   const computer = state.computers[0];
   frame('Agent workspace', `<header class="page-header"><h1>Agent workspace</h1><p>The computer is for Talisman to operate on your behalf.</p></header>
     ${section('Assigned runtime', 'Created automatically from your first private Telegram message.', `<div class="detail-row"><span class="row-icon">▣</span><div class="row-copy"><strong>${escapeHtml(computer?.name || 'No computer yet')}</strong><span>${escapeHtml(computerStatus(computer))}</span></div><span class="status-dot ${computer?.online ? 'live' : ''}"></span></div>${computer?.provisioning === 'failed' ? `<p class="warning">${escapeHtml(computer.provisionError || 'Provisioning failed')}</p>` : ''}`)}
-    ${section('How it works', '', '<p class="body-copy">Talisman operates this computer privately. Your Telegram account owns the agent; the dashboard shows its status and connection only.</p>')}`);
+    ${section('Live computer', 'View only. Talisman controls this desktop.', computer?.online ? '<div class="viewer"><img id="computer-view" src="/api/computers/view" alt="Live view of your assigned computer"></div><p class="quiet">Refreshes every few seconds. Controls stay with Talisman.</p>' : '<p class="body-copy">The live view appears when your computer is online.</p>')}`);
+  const image=document.querySelector('#computer-view');
+  if(image){const timer=setInterval(()=>{if(!image.isConnected){clearInterval(timer);return}image.src=`/api/computers/view?t=${Date.now()}`},3000);image.onerror=()=>{image.alt='Computer image temporarily unavailable'}}
+}
+
+function renderCalendar() {
+  frame('Calendar', `<header class="page-header"><h1>Calendar</h1><p>Plans you and Talisman can both use.</p></header><div id="talisman-calendar"></div>
+  ${section('Add an event','Keep your plans in one place.',`<form id="event-form" class="stack-form"><label>Title<input name="title" required maxlength="200"></label><label>Starts<input name="start" type="datetime-local" required></label><label>Ends<input name="end" type="datetime-local" required></label><label>Details<textarea name="description" maxlength="2000"></textarea></label><button class="solid-button">Add event</button><p id="calendar-message" role="status"></p></form>`)}`);
+  if(!window.FullCalendar?.Calendar){document.querySelector('#talisman-calendar').textContent='Calendar library could not load.';return;}
+  const calendar=new window.FullCalendar.Calendar(document.querySelector('#talisman-calendar'),{initialView:'dayGridMonth',height:'auto',headerToolbar:{left:'prev,next today',center:'title',right:'dayGridMonth,timeGridWeek,listWeek'},events:async(info,success,failure)=>{try{const data=await api(`/calendar/events?from=${encodeURIComponent(info.start.toISOString())}&to=${encodeURIComponent(info.end.toISOString())}`);success(data.events.map(item=>({id:item.id,title:item.title,start:new Date(item.start_at).toISOString(),end:new Date(item.end_at).toISOString(),extendedProps:{description:item.description}})))}catch(error){failure(error)}},eventClick:async(info)=>{if(confirm(`Remove “${info.event.title}” from your calendar?`)){await api(`/calendar/events/${info.event.id}`,{method:'DELETE'});calendar.refetchEvents()}}});
+  calendar.render();
+  document.querySelector('#event-form').onsubmit=async event=>{event.preventDefault();const form=event.target;try{await api('/calendar/events',{method:'POST',body:JSON.stringify({title:form.elements.title.value,description:form.elements.description.value,start:new Date(form.elements.start.value).toISOString(),end:new Date(form.elements.end.value).toISOString()})});form.reset();calendar.refetchEvents();document.querySelector('#calendar-message').textContent='Event added.'}catch(error){document.querySelector('#calendar-message').textContent=error.message}};
+}
+
+async function renderTasks() {
+  frame('Activity',`<header class="page-header"><h1>Activity</h1><p>What Talisman has done and what is still running.</p></header><div id="task-list">Loading…</div>`);
+  try{const tasks=await api('/tasks');document.querySelector('#task-list').innerHTML=tasks.length?tasks.map(t=>`<button class="activity-row" data-task="${escapeHtml(t.id)}"><strong>${escapeHtml(t.kind)}</strong><span>${escapeHtml(t.status)} · ${new Date(t.created_at).toLocaleString()}</span></button>`).join(''):'No tasks yet.';document.querySelectorAll('[data-task]').forEach(button=>button.onclick=async()=>{const receipt=await api(`/tasks/${button.dataset.task}`);const details=receipt.steps.map(s=>`${s.ordinal+1}. ${s.summary} — ${s.status}`).join('\n');alert(`${receipt.status}\n${details||'No recorded computer steps.'}`)})}catch(error){document.querySelector('#task-list').textContent=error.message}
+}
+
+async function renderVault() {
+  frame('Vault',`<header class="page-header"><h1>Vault</h1><p>Private website logins. Passwords are encrypted at rest and never shown in the list.</p></header><div id="vault-list">Loading…</div>
+  ${section('Save a login','Use the exact HTTPS site address.',`<form id="vault-form" class="stack-form" autocomplete="off"><label>Name<input name="label" required maxlength="100"></label><label>Website<input name="origin" type="url" placeholder="https://example.com" required></label><label>Username<input name="username" required maxlength="300"></label><label>Password<input name="password" type="password" required></label><button class="solid-button">Save login</button><p id="vault-message" role="status"></p></form>`)}`);
+  const reload=async()=>{const data=await api('/vault/logins');document.querySelector('#vault-list').innerHTML=data.logins.length?data.logins.map(item=>`<div class="detail-row"><div class="row-copy"><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.username)} · ${escapeHtml(item.origin)}</span></div><button class="outline-button" data-delete-login="${escapeHtml(item.id)}">Remove</button></div>`).join(''):'No logins saved.';document.querySelectorAll('[data-delete-login]').forEach(button=>button.onclick=async()=>{if(!confirm('Remove this saved login?'))return;await api(`/vault/logins/${button.dataset.deleteLogin}`,{method:'DELETE'});reload()})};
+  try{await reload()}catch(error){document.querySelector('#vault-list').textContent=error.message}
+  document.querySelector('#vault-form').onsubmit=async event=>{event.preventDefault();const form=event.target;try{await api('/vault/logins',{method:'POST',body:JSON.stringify({label:form.elements.label.value,origin:form.elements.origin.value,username:form.elements.username.value,password:form.elements.password.value})});form.reset();document.querySelector('#vault-message').textContent='Login saved.';await reload()}catch(error){document.querySelector('#vault-message').textContent=error.message}};
 }
 
 function renderPreferences() {
@@ -141,7 +184,11 @@ function renderModels() {
 
 function render() {
   if (!state.me) return renderWelcome();
+  if(state.profile&&!state.profile.complete){renderWorkspace();showCredentialSetup();return}
   if (state.view === 'computers') return renderComputers();
+  if (state.view === 'calendar') return renderCalendar();
+  if (state.view === 'tasks') return renderTasks();
+  if (state.view === 'vault') return renderVault();
   if (state.view === 'preferences') return renderPreferences();
   if (state.view === 'models') return renderModels();
   renderWorkspace();

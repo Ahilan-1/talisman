@@ -105,7 +105,7 @@ test('Telegram-only chat, single-account pairing, legacy linking, and connected 
  await handleTelegramMessage(db,{chat:{id:111,type:'private'},from:{id:111,username:'one'},text:'/watch 5m https://example.com'},deps);
  const watchId=db.prepare('SELECT id FROM web_watches WHERE user_id=?').get(first.data.id).id;
  const beforeBaseline=sent.length;
- for(const [extracted,expectedSilent] of [['Original page',true],['Updated page',false]]){
+ for(const [extracted,expectedSilent] of [['Original page',true],['Updated page',true]]){
    const watchJob=crypto.randomUUID();
    db.prepare('INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?)').run(watchJob,computerId,first.data.id,'watch',JSON.stringify({watchId,url:'https://example.com/'}),'running',null,Date.now(),Date.now());
    db.prepare('INSERT INTO telegram_requests(job_id,user_id,chat_id,created_at) VALUES(?,?,?,?)').run(watchJob,first.data.id,'111',Date.now());
@@ -113,8 +113,8 @@ test('Telegram-only chat, single-account pairing, legacy linking, and connected 
    assert.equal(!!JSON.parse(db.prepare('SELECT result FROM jobs WHERE id=?').get(watchJob).result).silent,expectedSilent);
    await deliverTelegramResults(db,deps.send);
  }
- assert.equal(sent.length,beforeBaseline+1);
- assert.match(sent.at(-1).text,/Updated page/);
+ assert.equal(sent.length,beforeBaseline);
+ assert.match(db.prepare("SELECT summary FROM proactive_events WHERE user_id=? AND kind='website_change'").get(first.data.id).summary,/Updated page/);
  await handleTelegramMessage(db,{chat:{id:111,type:'private'},from:{id:111,username:'one'},text:`/unwatch ${watchId}`},deps);
  assert.equal(db.prepare('SELECT count(*) AS n FROM web_watches WHERE user_id=?').get(first.data.id).n,0);
  // Simulate the credential provisioned into this account's cloud container.

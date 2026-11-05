@@ -1,7 +1,7 @@
 # Talisman — Developer Documentation
 
 Status: **early MVP, testing phase.** Not commercially launched, not multi-tenant hardened, not production SLA.
-Last reviewed: 2026-11-03.
+Last reviewed: 2026-11-05. See [README.md](README.md) for the current feature summary and [POSTGRES_MIGRATION.md](POSTGRES_MIGRATION.md) for the database cutover. The older architecture details below still describe the SQLite runtime, but the dashboard now includes a view-only desktop image, calendar, vault storage, activity receipts and Telegram-first website credentials.
 
 This document is for developers working on the repository. It explains how the infrastructure actually works, what
 is deliberately unfinished, why web browsing and memory are unreliable today, what is missing in the prompt and tool

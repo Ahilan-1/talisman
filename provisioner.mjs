@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url';
 const root=path.dirname(fileURLToPath(import.meta.url));
 const dataDir=path.resolve(process.env.TALISMAN_DATA_DIR||path.join(root,'data'));
 const db=new DatabaseSync(path.join(dataDir,'talisman.sqlite'));
+db.exec('PRAGMA busy_timeout=5000');
 db.exec('PRAGMA journal_mode=WAL');
+if(!db.prepare('PRAGMA table_info(computer_provisioning)').all().some(column=>column.name==='view_token'))db.exec('ALTER TABLE computer_provisioning ADD COLUMN view_token TEXT');
 const socketPath=process.env.DOCKER_SOCKET||'/var/run/docker.sock';
 const image=process.env.TALISMAN_DESKTOP_IMAGE||'talisman-desktop:local';
 const network=process.env.TALISMAN_DOCKER_NETWORK||'talisman_default';
@@ -18,13 +20,14 @@ const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
 function docker(method,route,payload){return new Promise((resolve,reject)=>{const request=http.request({socketPath,path:`/v1.43${route}`,method,headers:{'content-type':'application/json'}},response=>{let data='';response.on('data',chunk=>data+=chunk);response.on('end',()=>{let parsed;try{parsed=JSON.parse(data||'{}')}catch{parsed={message:data}}if(response.statusCode>=400)reject(new Error(parsed.message||`Docker HTTP ${response.statusCode}`));else resolve(parsed)})});request.on('error',reject);request.end(payload?JSON.stringify(payload):undefined)})}
 
 export function containerSpec(computerId,workerKey,options={}){
-  const name=`talisman-${computerId}`;
+  const name=options.name||`talisman-${computerId}`;
   const networkName=options.network||network;
   return {name,body:{Image:options.image||image,Env:[
     'PUID=1000','PGID=1000','TZ=Etc/UTC',
     `TALISMAN_URL=${options.serverUrl||serverUrl}`,
     `TALISMAN_COMPUTER_ID=${computerId}`,
     `TALISMAN_WORKER_KEY=${workerKey}`,
+    `TALISMAN_VIEW_TOKEN=${options.viewToken||''}`,
     'OPENCODE_URL=http://127.0.0.1:4096',
     ...(process.env.OPENCODE_API_KEY?[`OPENCODE_API_KEY=${process.env.OPENCODE_API_KEY}`]:[]),
     `SUBFOLDER=/desktop/${computerId}/`,
@@ -32,10 +35,31 @@ export function containerSpec(computerId,workerKey,options={}){
   ],HostConfig:{NetworkMode:networkName,Binds:[`talisman-home-${computerId}:/config`],ShmSize:1073741824,Memory:2147483648,NanoCpus:2000000000,PidsLimit:512,RestartPolicy:{Name:'unless-stopped'},SecurityOpt:['no-new-privileges:true']},NetworkingConfig:{EndpointsConfig:{[networkName]:{}}}}};
 }
 
+async function upgrade(row){
+  if(db.prepare("SELECT 1 FROM jobs WHERE computer_id=? AND status IN ('queued','running') LIMIT 1").get(row.computer_id))return;
+  const key=crypto.randomBytes(32).toString('base64url'),viewToken=crypto.randomBytes(32).toString('base64url');
+  const spec=containerSpec(row.computer_id,key,{viewToken,name:`talisman-${row.computer_id}-v${Date.now()}`});
+  let stopped=false,created=false;
+  try{
+    await docker('POST',`/containers/${encodeURIComponent(row.container_name)}/stop?t=10`);stopped=true;
+    await docker('POST',`/containers/create?name=${encodeURIComponent(spec.name)}`,spec.body);created=true;
+    await docker('POST',`/containers/${encodeURIComponent(spec.name)}/start`);
+    db.exec('BEGIN IMMEDIATE');
+    try{db.prepare('UPDATE computers SET worker_key_hash=?,last_seen=NULL WHERE id=?').run(hash(key),row.computer_id);db.prepare('UPDATE computer_provisioning SET container_name=?,view_token=?,updated_at=? WHERE computer_id=?').run(spec.name,viewToken,Date.now(),row.computer_id);db.exec('COMMIT')}catch(error){db.exec('ROLLBACK');throw error}
+    await docker('DELETE',`/containers/${encodeURIComponent(row.container_name)}?force=1`);
+    console.log(`Upgraded computer ${row.computer_id}`);
+  }catch(error){
+    if(created)await docker('DELETE',`/containers/${encodeURIComponent(spec.name)}?force=1`).catch(()=>{});
+    if(stopped)await docker('POST',`/containers/${encodeURIComponent(row.container_name)}/start`).catch(()=>{});
+    console.error(`Computer upgrade retry ${row.computer_id}: ${error.message}`);
+  }
+}
+
 async function provision(row){
   const key=crypto.randomBytes(32).toString('base64url');
-  const spec=containerSpec(row.computer_id,key);
-  db.prepare("UPDATE computer_provisioning SET status='starting',error=NULL,container_name=?,updated_at=? WHERE computer_id=?").run(spec.name,Date.now(),row.computer_id);
+  const viewToken=crypto.randomBytes(32).toString('base64url');
+  const spec=containerSpec(row.computer_id,key,{viewToken});
+  db.prepare("UPDATE computer_provisioning SET status='starting',error=NULL,container_name=?,view_token=?,updated_at=? WHERE computer_id=?").run(spec.name,viewToken,Date.now(),row.computer_id);
   try{
     await docker('POST',`/containers/create?name=${encodeURIComponent(spec.name)}`,spec.body);
     db.prepare('UPDATE computers SET worker_key_hash=? WHERE id=?').run(hash(key),row.computer_id);
@@ -51,7 +75,7 @@ async function provision(row){
 if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   console.log('Talisman provisioner started');
   for(;;){
-    try{const row=db.prepare("SELECT computer_id FROM computer_provisioning WHERE status='pending' ORDER BY updated_at LIMIT 1").get();if(row)await provision(row);else await sleep(2000)}
+    try{const row=db.prepare("SELECT computer_id FROM computer_provisioning WHERE status='pending' ORDER BY updated_at LIMIT 1").get();if(row)await provision(row);else{const outdated=db.prepare("SELECT computer_id,container_name FROM computer_provisioning WHERE status='running' AND view_token IS NULL AND container_name IS NOT NULL ORDER BY updated_at LIMIT 1").get();if(outdated)await upgrade(outdated);else await sleep(2000)}}
     catch(error){console.error('Provisioner retry:',error.message);await sleep(5000)}
   }
 }

@@ -8,13 +8,13 @@ import { buildTaskPrompt } from './prompt.mjs';
 const control=(process.env.TALISMAN_URL||'http://127.0.0.1:3000').replace(/\/$/,'');
 const opencode=(process.env.OPENCODE_URL||'http://127.0.0.1:4096').replace(/\/$/,'');
 const file=process.env.TALISMAN_WORKER_STATE||path.join(os.homedir(),'.talisman-worker.json');
-const SKILL_NOTES={computer:'browsing, searching, clicking, forms, screenshots',assistant:'reminders, follow-ups, website watches and cancellation',booking:'tickets, reservations and purchases with approval gates',research:'comparing options and verifying live facts',documents:'reading forwarded files',planning:'breaking down complex multi-step work'};
+const SKILL_NOTES={computer:'browsing, searching, clicking, forms, screenshots',assistant:'reminders, calendar events, follow-ups, website watches and cancellation',booking:'tickets, reservations and purchases with approval gates',research:'comparing options and verifying live facts',documents:'reading forwarded files',planning:'breaking down complex multi-step work'};
 const skills=(()=>{try{return fs.readdirSync(new URL('./skills/',import.meta.url),{withFileTypes:true}).filter(entry=>entry.isDirectory()).map(entry=>({name:entry.name,path:`/config/.opencode/skills/${entry.name}/SKILL.md`,description:SKILL_NOTES[entry.name]||'task recipe'}))}catch{return []}})();
 let state=process.env.TALISMAN_WORKER_KEY?{key:process.env.TALISMAN_WORKER_KEY,computerId:process.env.TALISMAN_COMPUTER_ID}:fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):null;
 async function request(url,options={}){const r=await fetch(url,{...options,signal:options.signal||AbortSignal.timeout(options.timeoutMs||120000)});const value=await r.json().catch(()=>({}));if(!r.ok)throw Error(value.error||`HTTP ${r.status}`);return value;}
 if(!state){const code=process.env.TALISMAN_PAIR_CODE||process.argv[2];if(!code)throw Error('Set TALISMAN_PAIR_CODE or pass the pairing code as an argument');state=await request(`${control}/api/worker/pair`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code})});fs.writeFileSync(file,JSON.stringify(state),{mode:0o600});console.log('Computer paired');}
 const auth={'authorization':`Bearer ${state.key}`};
-const assistantActions=new Set(['create_reminder','create_followup','create_watch','list_commitments','cancel_commitment']);
+const assistantActions=new Set(['create_reminder','create_followup','create_watch','list_commitments','cancel_commitment','create_calendar_event','list_calendar_events']);
 const allowed=new Set(['search','extract','screen','open','read','text','find','inspect','wait','scroll','click','fill','select','hover','press','back','forward','newtab','switch','screenshot',...assistantActions]);
 async function oc(route,options={}){return request(`${opencode}${route}`,options);}
 async function imageInput(screenshotPath){
@@ -24,18 +24,31 @@ async function imageInput(screenshotPath){
   return {type:'input_image',image_url:`data:image/png;base64,${bytes.toString('base64')}`,detail:'low'};
  }catch{return null}
 }
-async function computerAction(action,args,signal){
+async function computerAction(action,args,signal,job,ordinal){
  if(assistantActions.has(action)){
   const result=await request(`${control}/api/worker/assistant/action`,{method:'POST',headers:{...auth,'content-type':'application/json'},body:JSON.stringify({action,args}),signal:AbortSignal.any([signal,AbortSignal.timeout(20_000)])});
   return {result};
  }
- const result=await request('http://127.0.0.1:4150/action',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,...args}),signal:AbortSignal.any([signal,AbortSignal.timeout(90_000)])});
+ let result=await request('http://127.0.0.1:4150/action',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,...args}),signal:AbortSignal.any([signal,AbortSignal.timeout(90_000)])});
+ if(result?.approvalRequired){
+  const requestDetails=result.approvalRequired;
+  const approval=await request(`${control}/api/worker/task/approval`,{method:'POST',headers:{...auth,'content-type':'application/json'},body:JSON.stringify({jobId:job.id,action,summary:`${requestDetails.label} on ${requestDetails.url}`,details:requestDetails}),signal});
+  for(let i=0;i<180;i++){
+   await sleep(1000,null,{signal});
+   const status=await request(`${control}/api/worker/task/approval/${approval.id}`,{headers:auth,signal});
+   if(status.status==='approved')break;
+   if(status.status!=='pending')throw Error(`The action was ${status.status}; nothing was submitted.`);
+   if(i===179)throw Error('Approval timed out; nothing was submitted.');
+  }
+  result=await request('http://127.0.0.1:4150/action',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,...args,approvalId:approval.id}),signal:AbortSignal.any([signal,AbortSignal.timeout(90_000)])});
+ }
  if(action==='screenshot'&&result?.screenshot){const {screenshot,...rest}=result;const image=await imageInput(screenshot);return {result:rest,image};}
  return {result};
 }
 async function openAIComputer(job,p){
  const controller=new AbortController(),stopWatching=watchCancellation(job.id,controller);
  const input=[...(Array.isArray(p.history)?p.history.slice(-16).filter(x=>['user','assistant'].includes(x.role)).map(x=>({role:x.role,content:String(x.text||'').slice(0,2000)})):[]),{role:'user',content:String(p.text||'')}];
+ if(Array.isArray(p.resumeSteps)&&p.resumeSteps.length)input.push({role:'user',content:`The computer task was interrupted. These read-only actions completed before restart: ${JSON.stringify(p.resumeSteps).slice(0,8000)}. Continue the original request from verified state; check the current page before relying on it.`});
  const started=Date.now();
  try{
   for(let round=0;round<22;round++){
@@ -53,8 +66,10 @@ async function openAIComputer(job,p){
     if(!allowed.has(action)||!call.callId)throw Error('Unsupported computer action');
     let args;try{args=JSON.parse(call.arguments||'{}')}catch{args={}}
     let outcome;
-    try{outcome=await computerAction(action,args,controller.signal)}
-    catch(error){if(controller.signal.aborted)throw error;outcome={result:{error:error.message}}}
+    const ordinal=(Array.isArray(p.resumeSteps)?p.resumeSteps.length*10:0)+round*10+calls.indexOf(call);
+    await request(`${control}/api/worker/task/step`,{method:'POST',headers:{...auth,'content-type':'application/json'},body:JSON.stringify({jobId:job.id,ordinal,kind:action,summary:`${action} ${String(args.url||args.selector||args.query||'').slice(0,150)}`,status:'running'}),signal:controller.signal});
+    try{outcome=await computerAction(action,args,controller.signal,job,ordinal);await request(`${control}/api/worker/task/step`,{method:'POST',headers:{...auth,'content-type':'application/json'},body:JSON.stringify({jobId:job.id,ordinal,kind:action,summary:`${action} ${String(args.url||args.selector||args.query||'').slice(0,150)}`,status:'done',output:outcome.result}),signal:controller.signal})}
+    catch(error){if(controller.signal.aborted)throw error;outcome={result:{error:error.message}};await request(`${control}/api/worker/task/step`,{method:'POST',headers:{...auth,'content-type':'application/json'},body:JSON.stringify({jobId:job.id,ordinal,kind:action,summary:`${action} ${String(args.url||args.selector||args.query||'').slice(0,150)}`,status:'failed',output:outcome.result}),signal:controller.signal}).catch(()=>{})}
     input.push({type:'function_call_output',call_id:call.callId,output:JSON.stringify(outcome.result).slice(0,10000)});
     if(outcome.image)input.push({role:'user',content:[{type:'input_text',text:'Screenshot of the current page.'},outcome.image]});
    }
@@ -108,7 +123,7 @@ async function run(job){const p=job.payload||{};
   const selected=chooseModel(available);
   const provider=selected.provider,model=selected.id;
   const session=p.sessionId?{id:String(p.sessionId)}:await oc('/session',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({title:String(p.text).slice(0,60)})});
-  const systemPrompt=buildTaskPrompt({timeZone:p.timeZone||'UTC',soul:String(p.soul||''),memory:{entries:Array.isArray(p.context)?p.context:[],index:Array.isArray(p.memoryIndex)?p.memoryIndex:[]},history:Array.isArray(p.history)?p.history:[],skills});
+  const systemPrompt=buildTaskPrompt({timeZone:p.timeZone||'UTC',soul:String(p.soul||''),memory:{entries:Array.isArray(p.context)?p.context:[],index:Array.isArray(p.memoryIndex)?p.memoryIndex:[]},history:Array.isArray(p.history)?p.history:[],skills,extra:`Current task ID: ${job.id}. For a consequential browser click, use the consequential intent and wait for the person's Telegram approval.`});
   const controller=new AbortController(),started=Date.now();
   const stopWatching=watchCancellation(job.id,controller,async()=>{const status=(await oc('/session/status',{timeoutMs:5000}))[session.id];if(status?.type==='retry'&&status.action?.reason==='free_tier_limit')controller.abort(new Error('OpenCode access has reached its usage limit.'));});
   try{

@@ -426,6 +426,24 @@ button { cursor: pointer; }
 
 /* Footer ----------------------------------------------------------------- */
 
+.stack-form { display:grid; gap:14px; max-width:520px; }
+.viewer { border:1px solid var(--line); background:#171717; min-height:240px; overflow:hidden; }
+.viewer img { display:block; width:100%; height:auto; user-select:none; pointer-events:none; }
+.modal-backdrop { position:fixed; inset:0; z-index:100; display:grid; place-items:center; padding:20px; background:rgba(20,18,17,.5); }
+.setup-panel { width:min(100%,440px); max-height:calc(100vh - 40px); overflow:auto; padding:32px; background:var(--paper); color:var(--ink); box-shadow:0 20px 70px rgba(0,0,0,.18); }
+.setup-panel h2 { font-family:Georgia,serif; font-size:32px; font-weight:400; margin:20px 0 8px; }
+.setup-panel p { color:var(--mute); line-height:1.5; }
+.stack-form label { display:grid; gap:6px; font-size:13px; font-weight:600; }
+.stack-form input,.stack-form textarea { width:100%; box-sizing:border-box; padding:12px; border:1px solid var(--line); background:transparent; color:var(--ink); font:inherit; }
+.stack-form textarea { min-height:80px; resize:vertical; }
+.stack-form .solid-button { justify-self:start; }
+.activity-row { display:flex; width:100%; gap:12px; justify-content:space-between; padding:16px 0; border:0; border-bottom:1px solid var(--line); background:transparent; color:var(--ink); text-align:left; cursor:pointer; }
+.activity-row span { color:var(--mute); }
+#talisman-calendar { margin:22px 0 50px; --fc-border-color:var(--line); --fc-button-bg-color:var(--ink); --fc-button-border-color:var(--ink); --fc-button-hover-bg-color:var(--ink); --fc-button-active-bg-color:var(--ink); }
+#talisman-calendar .fc { font-family:inherit; }
+#talisman-calendar .fc-toolbar-title { font-family:Georgia,serif; font-size:24px; }
+#talisman-calendar .fc-event { background:var(--ink); border-color:var(--ink); }
+
 .page-footer {
   margin-top: clamp(40px, 8vh, 72px);
   padding-top: 18px;

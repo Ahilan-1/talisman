@@ -3,6 +3,8 @@ WORKDIR /app
 COPY server.mjs telegram.mjs provisioner.mjs worker.mjs document-tools.mjs openai-connection.mjs user-profile.mjs prompt.mjs memory.mjs schedule.mjs proactive.mjs telegram-format.mjs ./
 COPY arlong.mjs ./
 COPY assistant-actions.mjs ./
+COPY orchestration.mjs ./
+COPY accounts.mjs ./
 COPY public ./public
 COPY prompts ./prompts
 ENV HOST=0.0.0.0 PORT=3000 TALISMAN_DATA_DIR=/data

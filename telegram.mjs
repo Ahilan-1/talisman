@@ -3,8 +3,9 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { answerOnboarding, startOnboarding, syncUserFiles, userSoul } from './user-profile.mjs';
 import { rememberFromMessage, searchMemories, selectMemoryContext, upsertMemory } from './memory.mjs';
 import { formatWhen, nextDailyAt, parseWhenPrefix, validTimeZone } from './schedule.mjs';
-import { proactiveSettings, runProactiveTick } from './proactive.mjs';
+import { proactiveSettings, quietNow, runProactiveTick } from './proactive.mjs';
 import { formatChunks } from './telegram-format.mjs';
+import { decideApproval, taskReceipt, logTaskEvent } from './orchestration.mjs';
 
 const upsertState = (db, key, value) => db.prepare('INSERT INTO app_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, String(value));
 
@@ -96,7 +97,13 @@ export async function handleTelegramMessage(db, message, dependencies) {
     }catch{return send('I could not download that file. Please try again.')}
   }
   if (!text) return send('Send me a text message to start a task.');
-  if (/^\/help(?:@\w+)?$/i.test(text)) return send('Just tell me what you need, or forward a PDF or spreadsheet.\n\nMemory: /remember, /memories, /memory <search>, /forget\nSchedule: /remind, /at 09:00 …, /daily 08:30 …, /every 2h …, /scheduled, /cancel ID\nSettings: /status, /mode, /timezone, /brief, /proactive on|off, /documents, /watch, /setup\nControl: /kill stops the current work and keeps your memory.');
+  if (/^\/help(?:@\w+)?$/i.test(text)) return send('Just tell me what you need, or forward a PDF or spreadsheet.\n\nMemory: /remember, /memories, /memory <search>, /forget\nSchedule: /remind, /at 09:00 …, /daily 08:30 …, /every 2h …, /scheduled, /cancel ID\nSettings: /status, /receipt, /mode, /timezone, /brief, /proactive on|off, /documents, /watch, /setup\nControl: /kill stops the current work and keeps your memory.');
+  if (/^\/receipt(?:@\w+)?$/i.test(text)) {
+    const latest=db.prepare('SELECT id FROM jobs WHERE user_id=? ORDER BY created_at DESC LIMIT 1').get(userId);
+    if(!latest)return send('No task receipt yet.');
+    const receipt=taskReceipt(db,latest.id,userId);
+    return send(`Latest task: ${receipt.status}\n${receipt.steps.slice(-12).map(step=>`• ${step.kind}: ${step.status}`).join('\n')||'No computer actions recorded yet.'}`);
+  }
   if (/^\/kill(?:@\w+)?$/i.test(text)) {
     const timestamp = Date.now();
     const canceled = db.prepare("SELECT id FROM jobs WHERE user_id=? AND status IN ('queued','running')").all(userId);
@@ -106,6 +113,8 @@ export async function handleTelegramMessage(db, message, dependencies) {
       const drop = db.prepare('DELETE FROM conversation_messages WHERE user_id=? AND job_id=?');
       for (const job of canceled) drop.run(userId, job.id);
       db.prepare('UPDATE telegram_requests SET delivered_at=? WHERE user_id=? AND delivered_at IS NULL').run(timestamp,userId);
+      db.prepare("UPDATE task_approvals SET status='rejected',decided_at=? WHERE user_id=? AND status='pending'").run(timestamp,userId);
+      for(const job of canceled)logTaskEvent(db,job.id,userId,'canceled','Canceled by user');
       db.prepare('DELETE FROM telegram_sessions WHERE user_id=?').run(userId);
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
@@ -324,6 +333,17 @@ export async function startTelegramBot({ db, hash, random, now, dataDir }) {
   upsertState(db, 'telegram_bot_username', me.username);
   const webhook = await call('getWebhookInfo', {});
   if (webhook.url) throw new Error('A Telegram webhook is active; polling cannot start until it is removed.');
+  setInterval(async()=>{
+    const pending=db.prepare("SELECT a.id,a.summary,a.details,a.expires_at,t.chat_id FROM task_approvals a JOIN telegram_accounts t ON t.user_id=a.user_id WHERE a.status='pending' AND a.created_at>0 AND a.id NOT IN (SELECT value FROM app_state WHERE key LIKE 'approval_sent:%') ORDER BY a.created_at LIMIT 10").all();
+    for(const item of pending){
+      if(item.expires_at<=Date.now())continue;
+      try{const details=JSON.parse(item.details||'{}');const context=details.context?`\nPage details:\n${String(details.context).slice(0,700)}`:'';await call('sendMessage',{chat_id:item.chat_id,text:`Approve this action?\n${item.summary}${context}\n\nCheck the total and recipient before approving. If they are missing or wrong, reject it. Expires in 15 minutes.`,reply_markup:{inline_keyboard:[[{text:'Approve',callback_data:`a:${item.id}`},{text:'Reject',callback_data:`r:${item.id}`}]]}});upsertState(db,`approval_sent:${item.id}`,item.id)}catch(error){console.error('Approval delivery retry:',error.message)}
+    }
+  },2000);
+  setInterval(async()=>{
+    const events=db.prepare("SELECT e.id,e.user_id,e.summary,t.chat_id FROM proactive_events e JOIN telegram_accounts t ON t.user_id=e.user_id WHERE e.status='pending' ORDER BY e.created_at LIMIT 10").all();
+    for(const event of events){try{const settings=proactiveSettings(db,event.user_id);if(!settings.enabled)continue;const hour=Number(new Intl.DateTimeFormat('en-GB',{hour:'2-digit',hourCycle:'h23',timeZone:settings.timezone}).format(Date.now()));if(quietNow(hour,settings.quiet_start,settings.quiet_end))continue;await call('sendMessage',{chat_id:event.chat_id,text:event.summary,reply_markup:{inline_keyboard:[[{text:'Got it',callback_data:`e:${event.id}`}]]}});db.prepare("UPDATE proactive_events SET status='delivered',delivered_at=? WHERE id=? AND status='pending'").run(Date.now(),event.id)}catch(error){console.error('Proactive delivery retry:',error.message)}}
+  },5000);
   let sendingReminders = false;
   setInterval(async () => {
     if (sendingReminders) return;
@@ -401,10 +421,11 @@ export async function startTelegramBot({ db, hash, random, now, dataDir }) {
   const active = new Map();
   for (;;) {
     try {
-      const updates = await call('getUpdates', { offset, timeout: 25, allowed_updates: ['message'] });
+      const updates = await call('getUpdates', { offset, timeout: 25, allowed_updates: ['message','callback_query'] });
       for (const update of updates) {
         offset = Math.max(offset, update.update_id + 1);
         upsertState(db, 'telegram_offset', offset);
+        if(update.callback_query){const query=update.callback_query;const match=/^([are]):([a-f0-9-]{36})$/.exec(String(query.data||''));if(match){const account=db.prepare('SELECT user_id FROM telegram_accounts WHERE telegram_id=? AND chat_id=?').get(String(query.from?.id||''),String(query.message?.chat?.id||''));try{if(!account)throw Error('This action is not yours');let status,changed;if(match[1]==='e'){changed=!!db.prepare("UPDATE proactive_events SET status='acknowledged',responded_at=? WHERE id=? AND user_id=? AND status='delivered'").run(Date.now(),match[2],account.user_id).changes;status='Noted'}else{const decision=decideApproval(db,account.user_id,match[2],match[1]==='a'?'approved':'rejected');status=decision.status;changed=decision.changed}await call('answerCallbackQuery',{callback_query_id:query.id,text:status});if(changed)await call('editMessageReplyMarkup',{chat_id:query.message.chat.id,message_id:query.message.message_id,reply_markup:{inline_keyboard:[]}})}catch(error){await call('answerCallbackQuery',{callback_query_id:query.id,text:error.message.slice(0,150),show_alert:true}).catch(()=>{})}}continue}
         const message = update.message;
         if (!message) continue;
         const key = String(message.chat.id);
