@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { localDateKey, localHour, formatWhen, validTimeZone } from './schedule.mjs';
+import { localDateKey, zonedParts, formatWhen, validTimeZone } from './schedule.mjs';
 
 // Proactive layer: Talisman starts conversations instead of only answering them.
 // Everything here is deterministic and cheap — no model call is spent to say
@@ -62,18 +62,19 @@ export async function runProactiveTick(db, send, timestamp = Date.now()) {
       const computer = db.prepare('SELECT last_seen FROM computers WHERE user_id=? ORDER BY created_at LIMIT 1').get(userId);
       if (!computer?.last_seen || timestamp - computer.last_seen > 45_000) continue;
       if (db.prepare('SELECT 1 FROM telegram_requests WHERE user_id=? AND delivered_at IS NULL LIMIT 1').get(userId)) continue;
-      const hour = localHour(timestamp, zone);
+      const local = zonedParts(timestamp, zone);
+      const hour = local.hour;
       if (quietNow(hour, settings.quiet_start, settings.quiet_end)) continue;
       const lastSend = db.prepare('SELECT created_at FROM proactive_log WHERE user_id=? ORDER BY created_at DESC LIMIT 1').get(userId);
       if (lastSend && timestamp - lastSend.created_at < 6 * HOUR) continue;
 
       const today = localDateKey(timestamp, zone);
       const briefDay = settings.last_brief_at ? localDateKey(settings.last_brief_at, zone) : null;
-      if (briefDay !== today && hour >= settings.brief_hour) {
-        db.prepare('UPDATE proactive_settings SET last_brief_at=? WHERE user_id=?').run(timestamp, userId);
+      if (briefDay !== today && hour * 60 + local.minute >= settings.brief_hour * 60 + settings.brief_minute) {
         const brief = composeBrief(db, userId, settings, timestamp);
         if (brief) {
           await send(account.chat_id, brief);
+          db.prepare('UPDATE proactive_settings SET last_brief_at=? WHERE user_id=?').run(timestamp, userId);
           logProactive(db, userId, 'brief', brief, timestamp);
           sent += 1;
         }
@@ -92,7 +93,7 @@ export async function runProactiveTick(db, send, timestamp = Date.now()) {
       }
 
       const failed = db.prepare("SELECT id,payload,updated_at FROM jobs WHERE user_id=? AND status='failed' AND updated_at>? ORDER BY updated_at DESC LIMIT 1").get(userId, timestamp - DAY);
-      if (failed && !db.prepare('SELECT 1 FROM proactive_log WHERE user_id=? AND kind=? LIMIT 1').get(userId, `retry:${failed.id}`)) {
+      if (failed && failed.updated_at > (last?.role === 'assistant' ? last.created_at : 0) && !db.prepare('SELECT 1 FROM proactive_log WHERE user_id=? AND kind=? LIMIT 1').get(userId, `retry:${failed.id}`)) {
         let task = '';
         try { task = oneLine(JSON.parse(failed.payload).text, 90); } catch {}
         const retry = `That one did not finish earlier${task ? ` (${task})` : ''}. Want me to try again?`;

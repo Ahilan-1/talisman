@@ -11,6 +11,7 @@ import { ensureMemorySchema } from './memory.mjs';
 import { ensureProactiveSchema } from './proactive.mjs';
 import { ensureRecurringSchedule } from './schedule.mjs';
 import { createArlongClient } from './arlong.mjs';
+import { runAssistantAction } from './assistant-actions.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 if (fs.existsSync(path.join(root, '.env'))) {
@@ -133,6 +134,7 @@ async function handler(req,res) {
    if(p==='/api/worker/arlong/search'&&m==='POST'){const b=await body(req);return json(res,200,await arlong.search(b.query));}
    if(p==='/api/worker/arlong/extract'&&m==='POST'){const b=await body(req);return json(res,200,await arlong.extract(b.url));}
    if(p==='/api/worker/arlong/screen'&&m==='POST'){const b=await body(req);return json(res,200,await arlong.screen(b));}
+   if(p==='/api/worker/assistant/action'&&m==='POST'){const b=await body(req);return json(res,200,runAssistantAction(db,c.user_id,String(b.action||''),b.args||{}));}
    if(p==='/api/worker/openai/status'&&m==='GET')return json(res,200,{connected:openai.status(c.user_id).connected,preference:modelPreference(c.user_id)});
    if(p==='/api/worker/openai'&&m==='POST'){const b=await body(req);if(!openai.status(c.user_id).connected)return fail(res,409,'OpenAI account is not connected');if(typeof b.text!=='string'||b.text.length>50000)return fail(res,400,'Invalid task');const controller=new AbortController();res.on('close',()=>controller.abort());const text=await openai.generate(c.user_id,b.text,Array.isArray(b.context)?b.context.slice(0,20):[],String(b.soul||'').slice(0,5000),controller.signal,Array.isArray(b.history)?b.history:[],String(b.timeZone||'UTC').slice(0,60));if(!res.destroyed)return json(res,200,{text});return;}
    if(p==='/api/worker/openai/step'&&m==='POST'){const b=await body(req);if(!openai.status(c.user_id).connected)return fail(res,409,'OpenAI account is not connected');if(typeof b.text!=='string'||b.text.length>50000||!Array.isArray(b.input)||b.input.length>60)return fail(res,400,'Invalid task');const controller=new AbortController();res.on('close',()=>controller.abort());const result=await openai.step(c.user_id,b.text,Array.isArray(b.context)?b.context.slice(0,20):[],String(b.soul||'').slice(0,5000),b.input,controller.signal,String(b.timeZone||'UTC').slice(0,60));if(!res.destroyed)return json(res,200,result);return;}

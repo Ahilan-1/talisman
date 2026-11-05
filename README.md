@@ -42,6 +42,8 @@ For local testing, pair your Telegram account, open **Models**, and select **Con
 - `/timezone Asia/Kolkata`, `/brief 08:30`, `/proactive off` — your clock, your morning brief time, and whether Talisman may message you first.
 - Any other text — send a task to Talisman through the selected model route.
 
+The model can also set a reminder, schedule a future task, start a website change watch, list those commitments, or cancel one when you ask in ordinary language. It confirms each change only after the account-scoped tool returns an ID. Use an exact time and timezone for reliable scheduling. A website watch sets a baseline on its first successful read and alerts only on later text changes; a focused CSS selector helps avoid alerts from unrelated page updates.
+
 Each account has its own `SOUL.md` and `MEMORY.md` in the private control volume under `/data/users/<account-id>/`. The introduction and explicit `/remember` and `/forget` commands update these files. Their contents are included as account-specific context in the agent's requests.
 
 ## Architecture and current scope

@@ -8,13 +8,14 @@ import { buildTaskPrompt } from './prompt.mjs';
 const control=(process.env.TALISMAN_URL||'http://127.0.0.1:3000').replace(/\/$/,'');
 const opencode=(process.env.OPENCODE_URL||'http://127.0.0.1:4096').replace(/\/$/,'');
 const file=process.env.TALISMAN_WORKER_STATE||path.join(os.homedir(),'.talisman-worker.json');
-const SKILL_NOTES={computer:'browsing, searching, clicking, forms, screenshots',booking:'tickets, reservations and purchases with approval gates',research:'comparing options and verifying live facts',documents:'reading forwarded files',planning:'breaking down complex multi-step work'};
+const SKILL_NOTES={computer:'browsing, searching, clicking, forms, screenshots',assistant:'reminders, follow-ups, website watches and cancellation',booking:'tickets, reservations and purchases with approval gates',research:'comparing options and verifying live facts',documents:'reading forwarded files',planning:'breaking down complex multi-step work'};
 const skills=(()=>{try{return fs.readdirSync(new URL('./skills/',import.meta.url),{withFileTypes:true}).filter(entry=>entry.isDirectory()).map(entry=>({name:entry.name,path:`/config/.opencode/skills/${entry.name}/SKILL.md`,description:SKILL_NOTES[entry.name]||'task recipe'}))}catch{return []}})();
 let state=process.env.TALISMAN_WORKER_KEY?{key:process.env.TALISMAN_WORKER_KEY,computerId:process.env.TALISMAN_COMPUTER_ID}:fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):null;
 async function request(url,options={}){const r=await fetch(url,{...options,signal:options.signal||AbortSignal.timeout(options.timeoutMs||120000)});const value=await r.json().catch(()=>({}));if(!r.ok)throw Error(value.error||`HTTP ${r.status}`);return value;}
 if(!state){const code=process.env.TALISMAN_PAIR_CODE||process.argv[2];if(!code)throw Error('Set TALISMAN_PAIR_CODE or pass the pairing code as an argument');state=await request(`${control}/api/worker/pair`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code})});fs.writeFileSync(file,JSON.stringify(state),{mode:0o600});console.log('Computer paired');}
 const auth={'authorization':`Bearer ${state.key}`};
-const allowed=new Set(['search','extract','screen','open','read','text','find','inspect','wait','scroll','click','fill','select','hover','press','back','forward','newtab','switch','screenshot']);
+const assistantActions=new Set(['create_reminder','create_followup','create_watch','list_commitments','cancel_commitment']);
+const allowed=new Set(['search','extract','screen','open','read','text','find','inspect','wait','scroll','click','fill','select','hover','press','back','forward','newtab','switch','screenshot',...assistantActions]);
 async function oc(route,options={}){return request(`${opencode}${route}`,options);}
 async function imageInput(screenshotPath){
  try{
@@ -24,6 +25,10 @@ async function imageInput(screenshotPath){
  }catch{return null}
 }
 async function computerAction(action,args,signal){
+ if(assistantActions.has(action)){
+  const result=await request(`${control}/api/worker/assistant/action`,{method:'POST',headers:{...auth,'content-type':'application/json'},body:JSON.stringify({action,args}),signal:AbortSignal.any([signal,AbortSignal.timeout(20_000)])});
+  return {result};
+ }
  const result=await request('http://127.0.0.1:4150/action',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,...args}),signal:AbortSignal.any([signal,AbortSignal.timeout(90_000)])});
  if(action==='screenshot'&&result?.screenshot){const {screenshot,...rest}=result;const image=await imageInput(screenshot);return {result:rest,image};}
  return {result};
